@@ -1,0 +1,73 @@
+plugins {
+    alias libs.plugins.android.library
+    alias libs.plugins.jetbrains.kotlin.android
+    id 'kotlin-parcelize'
+    id 'kotlin-kapt'
+}
+
+android {
+    namespace 'com.thestudypath.pdf'
+    compileSdkVersion 36
+    compileSdkExtension 19
+
+    defaultConfig {
+        minSdk 31
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        consumerProguardFiles "consumer-rules.pro"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+    buildFeatures {
+        buildConfig true
+    }
+    lint {
+        targetSdk 36
+    }
+}
+
+dependencies {
+    implementation project(':core')
+
+    implementation libs.appcompat
+    implementation libs.material
+    implementation libs.constraintlayout
+    
+    // PDF Library
+    implementation libs.pdf.viewer.fragment
+    implementation libs.pdf.ink
+
+    //Legacy Pdf library
+    implementation libs.androidpdfviewer
+
+
+    // Coroutines
+    implementation libs.kotlinx.coroutines.core
+    implementation libs.kotlinx.coroutines.android
+
+    // Lifecycle
+    implementation libs.lifecycle.viewmodel.ktx
+    implementation libs.lifecycle.livedata.ktx
+    implementation libs.lifecycle.runtime.ktx
+
+    // Ads
+    implementation libs.play.services.ads
+    
+    // Firebase
+    implementation platform(libs.firebase.bom)
+    implementation libs.firebase.analytics
+
+    coreLibraryDesugaring libs.desugar.jdk.libs
+}

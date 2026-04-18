@@ -1,0 +1,27 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/report"
+        android:title="Report Error"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/change_orientation"
+        android:title="Landscape Mode"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/buy_premium"
+        android:title="Get Premium"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/buy_books"
+        android:title="Important Books"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/download_pdf"
+        android:title="Download PDF"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/share_app"
+        android:title="Share this App"
+        app:showAsAction="never" />
+</menu>
