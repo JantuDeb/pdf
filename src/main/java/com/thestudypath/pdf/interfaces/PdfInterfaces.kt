@@ -96,5 +96,6 @@ interface PagePersistence {
 
 enum class PdfMenuAction {
     DOWNLOAD,
+    SAVE_AS,
     CHANGE_ORIENTATION
 }

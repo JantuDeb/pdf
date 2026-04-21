@@ -15,6 +15,7 @@ data class PdfConfig(
     val showNightModeToggle: Boolean = true,
     val showSearchButton: Boolean = true,
     val showEditButtons: Boolean = true,
+    val showSaveAsOption: Boolean = true,
     val showDownloadOption: Boolean = true,
     val showOrientationOption: Boolean = true,
     val showFullscreenButton: Boolean = true,

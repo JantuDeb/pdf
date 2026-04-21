@@ -1,45 +1,39 @@
 plugins {
-    alias libs.plugins.android.library
-    alias libs.plugins.jetbrains.kotlin.android
-    id 'kotlin-parcelize'
-    id 'kotlin-kapt'
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.compose.compiler)
 }
 
 android {
-    namespace 'com.thestudypath.pdf'
-    compileSdkVersion 36
-    compileSdkExtension 19
+    namespace = 'com.thestudypath.pdf'
+    compileSdk = 37
 
     defaultConfig {
-        minSdk 31
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        minSdk = 31
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
     }
 
     buildTypes {
         release {
-            minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     compileOptions {
-        coreLibraryDesugaringEnabled true
-        sourceCompatibility JavaVersion.VERSION_21
-        targetCompatibility JavaVersion.VERSION_21
-    }
-    kotlinOptions {
-        jvmTarget = '21'
+        coreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
     buildFeatures {
-        buildConfig true
+        buildConfig = true
+        compose = true
     }
     lint {
-        targetSdk 36
+        targetSdk = 37
     }
 }
 
+
 dependencies {
-    implementation project(':core')
 
     implementation libs.appcompat
     implementation libs.material
@@ -52,22 +46,22 @@ dependencies {
     //Legacy Pdf library
     implementation libs.androidpdfviewer
 
+    // Compose
+    implementation platform(libs.androidx.compose.bom)
+    implementation libs.androidx.compose.ui
+    implementation libs.androidx.compose.material3
+    implementation libs.androidx.compose.ui.tooling.preview
+    implementation libs.androidx.activity.compose
+
 
     // Coroutines
     implementation libs.kotlinx.coroutines.core
     implementation libs.kotlinx.coroutines.android
 
     // Lifecycle
-    implementation libs.lifecycle.viewmodel.ktx
-    implementation libs.lifecycle.livedata.ktx
-    implementation libs.lifecycle.runtime.ktx
+    implementation libs.androidx.lifecycle.runtime.ktx
+    implementation libs.androidx.pdf.compose
 
-    // Ads
-    implementation libs.play.services.ads
-    
-    // Firebase
-    implementation platform(libs.firebase.bom)
-    implementation libs.firebase.analytics
 
     coreLibraryDesugaring libs.desugar.jdk.libs
 }
