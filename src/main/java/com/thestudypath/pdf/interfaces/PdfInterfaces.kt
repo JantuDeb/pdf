@@ -1,5 +1,6 @@
 package com.thestudypath.pdf.interfaces
 
+import android.net.Uri
 import android.view.View
 import com.thestudypath.pdf.PdfConfig
 import java.io.File
@@ -40,6 +41,9 @@ interface PdfActivityCallbacks {
 
     /** Called when annotations fail to save. */
     fun onAnnotationSaveFailed(error: Throwable) {}
+
+    /** Called after a PDF download completes successfully. */
+    fun onDownloadSucceeded(displayName: String, fileUri: Uri) {}
 
     /**
      * Return a View to display in the ad container at the top, or null for no ads.

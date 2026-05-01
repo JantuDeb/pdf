@@ -149,6 +149,7 @@
         android:id="@+id/fl_adplaceholder"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:paddingTop="16dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />

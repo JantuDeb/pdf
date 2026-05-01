@@ -119,16 +119,10 @@ open class PdfActivity : AppCompatActivity() {
         annotationSaver = provideAnnotationSaver()
         callbacks = provideCallbacks()
 
+        registerActiveWorkingFile()
+
         // Best-effort startup cleanup in case a prior session was killed before onDestroy.
-        runCatching {
-            val staleWorkingFile = getWorkingFile()
-            if (staleWorkingFile.exists()) {
-                val deleted = staleWorkingFile.delete()
-                Log.d(TAG, "Startup stale cleanup: deleted=$deleted")
-            }
-        }.onFailure {
-            Log.w(TAG, "Startup stale cleanup failed", it)
-        }
+        cleanupStaleWorkingFiles()
 
         // 2. Restore page
         currentPage = callbacks?.getPagePersistence()?.loadPage(pdfConfig.fileName)
@@ -430,26 +424,7 @@ open class PdfActivity : AppCompatActivity() {
         return try {
             val workingFile = getWorkingFile()
 
-            if (password.isNullOrEmpty()) {
-                // No password — just copy to working location
-                sourceFile.copyTo(workingFile, overwrite = true)
-            } else {
-                // Decrypt using PdfRenderer
-                val inputFd = ParcelFileDescriptor.open(
-                    sourceFile, ParcelFileDescriptor.MODE_READ_ONLY
-                )
-                val loadParams = LoadParams.Builder().setPassword(password).build()
-                val renderer = PdfRenderer(inputFd, loadParams)
-                val outputFd = ParcelFileDescriptor.open(
-                    workingFile,
-                    ParcelFileDescriptor.MODE_CREATE or
-                            ParcelFileDescriptor.MODE_READ_WRITE or
-                            ParcelFileDescriptor.MODE_TRUNCATE
-                )
-                renderer.write(outputFd, true)
-                outputFd.close()
-                renderer.close()
-            }
+            writeDecryptedPdfToFile(sourceFile, workingFile, password)
 
             getUriForFile(workingFile)
         } catch (e: Exception) {
@@ -489,6 +464,14 @@ open class PdfActivity : AppCompatActivity() {
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun setupEditModeCallbacks(fragment: EditablePdfViewerFragmentExtended) {
+        fragment.initialPage = currentPage
+        fragment.onPageChanged = { page ->
+            if (currentPage != page) {
+                currentPage = page
+                saveCurrentPage()
+                callbacks?.onPageChanged(page)
+            }
+        }
         fragment.onEditModeEntered = { onEditModeEntered() }
         fragment.onEditModeExited = { onEditModeExited() }
     }
@@ -734,13 +717,17 @@ open class PdfActivity : AppCompatActivity() {
         Toast.makeText(this, "PDF is being downloaded…", Toast.LENGTH_SHORT).show()
 
         CoroutineScope(Dispatchers.IO).launch {
-            val success = decryptAndCopyToDownloads(
+            val downloadedFileUri = decryptAndCopyToDownloads(
                 sourceFile,
                 pdfConfig.displayName ?: pdfConfig.fileName,
                 pdfConfig.password
             )
             withContext(Dispatchers.Main) {
-                if (success) {
+                if (downloadedFileUri != null) {
+                    callbacks?.onDownloadSucceeded(
+                        pdfConfig.displayName ?: pdfConfig.fileName,
+                        downloadedFileUri
+                    )
                     Toast.makeText(applicationContext, "PDF download completed", Toast.LENGTH_SHORT)
                         .show()
                 } else {
@@ -756,30 +743,11 @@ open class PdfActivity : AppCompatActivity() {
         sourceFile: File,
         displayName: String,
         password: String?
-    ): Boolean {
+    ): Uri? {
         return try {
             val decryptedFile = File(filesDir, "de_${sourceFile.name}")
 
-            // Decrypt
-            val inputFd = ParcelFileDescriptor.open(
-                sourceFile, ParcelFileDescriptor.MODE_READ_ONLY
-            )
-            val renderer = if (!password.isNullOrEmpty()) {
-                val params = LoadParams.Builder().setPassword(password).build()
-                PdfRenderer(inputFd, params)
-            } else {
-                PdfRenderer(inputFd)
-            }
-            val outputFd = ParcelFileDescriptor.open(
-                decryptedFile,
-                ParcelFileDescriptor.MODE_CREATE or
-                        ParcelFileDescriptor.MODE_READ_WRITE or
-                        ParcelFileDescriptor.MODE_TRUNCATE
-            )
-
-            renderer.write(outputFd, true)
-            outputFd.close()
-            renderer.close()
+            writeDecryptedPdfToFile(sourceFile, decryptedFile, password)
 
             // Copy to MediaStore Downloads
             val contentValues = ContentValues().apply {
@@ -797,11 +765,33 @@ open class PdfActivity : AppCompatActivity() {
                     }
                 }
                 decryptedFile.delete()
-                true
-            } ?: false
+                targetUri
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            false
+            null
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private fun writeDecryptedPdfToFile(sourceFile: File, targetFile: File, password: String?) {
+        if (password.isNullOrEmpty()) {
+            sourceFile.copyTo(targetFile, overwrite = true)
+            return
+        }
+
+        ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
+            val loadParams = LoadParams.Builder().setPassword(password).build()
+            PdfRenderer(inputFd, loadParams).use { renderer ->
+                ParcelFileDescriptor.open(
+                    targetFile,
+                    ParcelFileDescriptor.MODE_CREATE or
+                            ParcelFileDescriptor.MODE_READ_WRITE or
+                            ParcelFileDescriptor.MODE_TRUNCATE
+                ).use { outputFd ->
+                    renderer.write(outputFd, true)
+                }
+            }
         }
     }
 
@@ -840,9 +830,45 @@ open class PdfActivity : AppCompatActivity() {
     //  HELPERS
     // =====================================================================
 
-    private fun getWorkingFile(): File = File(cacheDir, "working_${pdfConfig.fileName}")
+    private fun getWorkingFileName(): String = buildWorkingFileName(pdfConfig.fileName)
+
+    private fun getWorkingFile(): File = File(cacheDir, getWorkingFileName())
 
     private fun getOriginalFile(): File = File(filesDir, pdfConfig.fileName)
+
+    private fun registerActiveWorkingFile() {
+        synchronized(activeWorkingFiles) {
+            activeWorkingFiles += getWorkingFileName()
+        }
+    }
+
+    private fun unregisterActiveWorkingFile() {
+        synchronized(activeWorkingFiles) {
+            activeWorkingFiles -= getWorkingFileName()
+        }
+    }
+
+    private fun cleanupStaleWorkingFiles() {
+        runCatching {
+            val activeFilesSnapshot = synchronized(activeWorkingFiles) {
+                activeWorkingFiles.toSet()
+            }
+
+            cacheDir.listFiles()
+                ?.asSequence()
+                ?.filter { it.isFile && it.name.startsWith(WORKING_FILE_PREFIX) }
+                ?.filterNot { it.name in activeFilesSnapshot }
+                ?.forEach { staleWorkingFile ->
+                    val deleted = staleWorkingFile.delete()
+                    Log.d(
+                        TAG,
+                        "Startup stale cleanup: file=${staleWorkingFile.name}, deleted=$deleted"
+                    )
+                }
+        }.onFailure {
+            Log.w(TAG, "Startup stale cleanup failed", it)
+        }
+    }
 
     private fun getUriForFile(file: File): Uri? {
         return try {
@@ -863,7 +889,10 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     private fun cleanupWorkingFile(reason: String) {
-        if (workingFileCleanupDone) return
+        if (workingFileCleanupDone) {
+            unregisterActiveWorkingFile()
+            return
+        }
 
         runCatching {
             val workingFile = getWorkingFile()
@@ -881,6 +910,8 @@ open class PdfActivity : AppCompatActivity() {
         }.onFailure {
             Log.w(TAG, "cleanupWorkingFile($reason) failed", it)
         }
+
+        unregisterActiveWorkingFile()
     }
 
     // =====================================================================
@@ -891,10 +922,15 @@ open class PdfActivity : AppCompatActivity() {
         private const val FRAGMENT_TAG = "pdf_viewer_fragment_tag"
         private const val PREFS_NAME = "generic_pdf_prefs"
         private const val KEY_PDF_DARK = "isPdfDark"
+        private const val WORKING_FILE_PREFIX = "working_"
 
         private const val MENU_ORIENTATION = 1
         private const val MENU_DOWNLOAD = 2
 
         private const val TAG = "PdfActivity"
+
+        private val activeWorkingFiles = mutableSetOf<String>()
+
+        private fun buildWorkingFileName(fileName: String): String = "$WORKING_FILE_PREFIX$fileName"
     }
 }
