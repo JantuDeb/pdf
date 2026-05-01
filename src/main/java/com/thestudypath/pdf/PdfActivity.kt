@@ -8,6 +8,7 @@ import android.content.res.Configuration
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.pdf.LoadParams
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
@@ -51,6 +52,9 @@ import androidx.core.content.edit
 import com.github.barteksc.pdfviewer.PDFView
 import com.github.barteksc.pdfviewer.scroll.DefaultScrollHandle
 import com.github.barteksc.pdfviewer.util.FitPolicy
+import com.thestudypath.pdf.walkthrough.PdfAnnotationWalkthrough
+import com.thestudypath.pdf.walkthrough.SpotlightCardPlacement
+import com.thestudypath.pdf.walkthrough.SpotlightStep
 
 /**
  * A fully self-contained PDF viewing/editing activity.
@@ -103,6 +107,8 @@ open class PdfActivity : AppCompatActivity() {
     private var currentPage: Int = 0
     private var pdfUri: Uri? = null
     private var workingFileCleanupDone: Boolean = false
+    private var annotationWalkthrough: PdfAnnotationWalkthrough? = null
+    private var adLoadRequested = false
 
     private lateinit var legacyPdfView: PDFView
 
@@ -151,12 +157,8 @@ open class PdfActivity : AppCompatActivity() {
             prepareAndOpenPdf()
         }
 
-        // 8. Ads — host provides the view, we just slot it in
-        callbacks?.getAdView()?.let { adView ->
-            adContainer.removeAllViews()
-            adContainer.addView(adView)
-            adContainer.visibility = View.VISIBLE
-        }
+        // 8. Ads — wait until annotation walkthroughs are complete before requesting ads.
+        maybeLoadAdView()
 
         // 9. Notify host
         callbacks?.onPdfOpened(pdfConfig)
@@ -166,6 +168,8 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
         cleanupWorkingFile("onDestroy")
         super.onDestroy()
     }
@@ -456,6 +460,7 @@ open class PdfActivity : AppCompatActivity() {
         }
 
         pdfViewerFragment?.documentUri = uri
+        flPdfViewFragment.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
     }
 
     // =====================================================================
@@ -486,16 +491,246 @@ open class PdfActivity : AppCompatActivity() {
         buttonSearch.visibility = View.GONE
         pdfViewerFragment?.isTextSearchActive = false
         callbacks?.onEditModeChanged(true)
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
+        flPdfViewFragment.postDelayed({ maybeShowEditModeWalkthrough() }, WALKTHROUGH_DELAY_MS)
     }
 
     private fun onEditModeExited() {
         isInEditMode = false
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
         buttonSave.visibility = View.GONE
         buttonCloseEdit.visibility = View.GONE
         buttonBack.visibility = View.VISIBLE
         if (pdfConfig.showNightModeToggle) materialSwitch.visibility = View.VISIBLE
         if (pdfConfig.showSearchButton) buttonSearch.visibility = View.VISIBLE
         callbacks?.onEditModeChanged(false)
+    }
+
+    // =====================================================================
+    //  ANNOTATION WALKTHROUGH
+    // =====================================================================
+
+    private fun maybeShowAnnotationIntroWalkthrough() {
+        if (!shouldShowAnnotationWalkthrough(KEY_ANNOTATION_INTRO_SEEN)) return
+        if (isInEditMode) return
+
+        annotationWalkthrough?.dismiss(markFinished = false)
+        val walkthrough = PdfAnnotationWalkthrough(this)
+        annotationWalkthrough = walkthrough
+        walkthrough.start(
+            steps = listOf(
+                SpotlightStep(
+                    targetRectProvider = { findEditButtonRect() ?: fallbackEditButtonRect() },
+                    title = "Annotate PDFs",
+                    message = "Tap the pen button to draw, highlight, and mark important steps.",
+                ),
+            ),
+            onFinished = {
+                markAnnotationWalkthroughSeen(KEY_ANNOTATION_INTRO_SEEN)
+                annotationWalkthrough = null
+                maybeLoadAdView()
+            },
+        )
+    }
+
+    private fun maybeShowEditModeWalkthrough() {
+        if (!isInEditMode) return
+        if (!shouldShowAnnotationWalkthrough(KEY_ANNOTATION_EDIT_SEEN)) {
+            maybeLoadAdView()
+            return
+        }
+
+        annotationWalkthrough?.dismiss(markFinished = false)
+        val walkthrough = PdfAnnotationWalkthrough(this)
+        annotationWalkthrough = walkthrough
+        walkthrough.start(
+            steps = listOf(
+                SpotlightStep(
+                    targetRectProvider = { findAnnotationControlsRect() ?: fallbackAnnotationToolbarRect() },
+                    title = "Choose a tool",
+                    message = "Tap pen or highlighter. Tap the selected pen again to change thickness, and use color to switch ink.",
+                    cardPlacement = SpotlightCardPlacement.TOP,
+                ),
+                SpotlightStep(
+                    target = buttonSave,
+                    title = "Save annotations",
+                    message = "Tap save when you want to keep your notes in this PDF.",
+                ),
+                SpotlightStep(
+                    target = buttonCloseEdit,
+                    title = "Exit edit mode",
+                    message = "Close editing when you are done. If changes are unsaved, we will ask before closing.",
+                ),
+            ),
+            onFinished = {
+                markAnnotationWalkthroughSeen(KEY_ANNOTATION_EDIT_SEEN)
+                annotationWalkthrough = null
+                maybeLoadAdView()
+            },
+        )
+    }
+
+    private fun maybeLoadAdView() {
+        if (adLoadRequested) return
+        if (hasPendingAnnotationWalkthrough()) return
+
+        callbacks?.getAdView()?.let { adView ->
+            adLoadRequested = true
+            adContainer.removeAllViews()
+            adContainer.addView(adView)
+            adContainer.visibility = View.VISIBLE
+        }
+    }
+
+    private fun hasPendingAnnotationWalkthrough(): Boolean {
+        if (!isPdfEditingSupported()) return false
+        if (!pdfConfig.showEditButtons) return false
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        return !prefs.getBoolean(KEY_ANNOTATION_INTRO_SEEN, false) ||
+                !prefs.getBoolean(KEY_ANNOTATION_EDIT_SEEN, false)
+    }
+
+    private fun shouldShowAnnotationWalkthrough(key: String): Boolean {
+        if (!isPdfEditingSupported()) return false
+        if (!pdfConfig.showEditButtons) return false
+        return !getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(key, false)
+    }
+
+    private fun markAnnotationWalkthroughSeen(key: String) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit {
+            putBoolean(key, true)
+        }
+    }
+
+    private fun findAnnotationToolbarRect(): RectF? {
+        val fragmentView = pdfViewerFragment?.view ?: return null
+        val toolbar = findViewByClassName(fragmentView, "AnnotationToolbar") ?: return null
+        if (toolbar.width == 0 || toolbar.height == 0 || toolbar.visibility != View.VISIBLE) return null
+        return rectInOverlayCoordinates(toolbar, padding = 8f)
+    }
+
+    private fun findAnnotationControlsRect(): RectF? {
+        val fragmentView = pdfViewerFragment?.view ?: return null
+        val annotationRects = mutableListOf<RectF>()
+        collectAnnotationControlRects(fragmentView, annotationRects)
+
+        val toolbarRect = findAnnotationToolbarRect()
+        if (toolbarRect != null) {
+            annotationRects += toolbarRect
+        }
+
+        return annotationRects
+            .takeIf { it.isNotEmpty() }
+            ?.reduce { union, rect ->
+                union.apply { union(rect) }
+            }
+    }
+
+    private fun collectAnnotationControlRects(view: View, output: MutableList<RectF>) {
+        if (view.visibility != View.VISIBLE || view.width == 0 || view.height == 0) return
+
+        if (isAnnotationControlView(view)) {
+            val rect = rectInOverlayCoordinates(view, padding = 8f)
+            if (isReasonableAnnotationControlRect(rect)) {
+                output += rect
+            }
+        }
+
+        val group = view as? android.view.ViewGroup ?: return
+        for (index in 0 until group.childCount) {
+            collectAnnotationControlRects(group.getChildAt(index), output)
+        }
+    }
+
+    private fun isAnnotationControlView(view: View): Boolean {
+        val name = view.javaClass.name
+        if (!name.startsWith("androidx.pdf")) return false
+        if (name.contains("PdfView")) return false
+
+        val controlNameHints = listOf(
+            "Annotation",
+            "Toolbar",
+            "Palette",
+            "Brush",
+            "Color",
+            "Pen",
+            "Highlighter",
+            "Eraser",
+            "Ink",
+        )
+        if (controlNameHints.none { name.contains(it, ignoreCase = true) }) return false
+
+        val rect = rectInOverlayCoordinates(view, padding = 0f)
+        val screenHeight = window.decorView.height
+        return rect.bottom > screenHeight * 0.45f
+    }
+
+    private fun isReasonableAnnotationControlRect(rect: RectF): Boolean {
+        val screenWidth = window.decorView.width.toFloat()
+        val screenHeight = window.decorView.height.toFloat()
+        if (rect.width() < 24f || rect.height() < 24f) return false
+        if (rect.height() > screenHeight * 0.34f) return false
+        if (rect.width() > screenWidth * 0.98f && rect.height() > screenHeight * 0.18f) return false
+        return rect.bottom > screenHeight * 0.45f
+    }
+
+    private fun findEditButtonRect(): RectF? {
+        val fragmentView = pdfViewerFragment?.view ?: return null
+        val editButton = findViewByClassName(fragmentView, "FloatingActionButton")
+            ?: findViewByClassName(fragmentView, "ExtendedFloatingActionButton")
+            ?: return null
+        if (editButton.width == 0 || editButton.height == 0 || editButton.visibility != View.VISIBLE) return null
+        val rect = rectInOverlayCoordinates(editButton, padding = 8f)
+        val containerRect = rectInOverlayCoordinates(flPdfViewFragment, padding = 0f)
+        if (rect.centerY() < containerRect.centerY()) return null
+        return rect
+    }
+
+    private fun findViewByClassName(view: View, classNamePart: String): View? {
+        if (view.javaClass.name.contains(classNamePart)) return view
+        val group = view as? android.view.ViewGroup ?: return null
+        for (index in 0 until group.childCount) {
+            findViewByClassName(group.getChildAt(index), classNamePart)?.let { return it }
+        }
+        return null
+    }
+
+    private fun fallbackAnnotationToolbarRect(): RectF {
+        val containerRect = rectInOverlayCoordinates(flPdfViewFragment, padding = 0f)
+        val toolbarHeight = 92f * resources.displayMetrics.density
+        return RectF(
+            containerRect.left + 16f,
+            containerRect.bottom - toolbarHeight - 16f,
+            containerRect.right - 16f,
+            containerRect.bottom - 16f,
+        )
+    }
+
+    private fun fallbackEditButtonRect(): RectF {
+        val containerRect = rectInOverlayCoordinates(flPdfViewFragment, padding = 0f)
+        val size = 76f * resources.displayMetrics.density
+        val margin = 28f * resources.displayMetrics.density
+        return RectF(
+            containerRect.right - size - margin,
+            containerRect.bottom - size - margin,
+            containerRect.right - margin,
+            containerRect.bottom - margin,
+        )
+    }
+
+    private fun rectInOverlayCoordinates(view: View, padding: Float): RectF {
+        val viewLocation = IntArray(2)
+        val decorLocation = IntArray(2)
+        view.getLocationOnScreen(viewLocation)
+        window.decorView.getLocationOnScreen(decorLocation)
+        return RectF(
+            viewLocation[0] - decorLocation[0] - padding,
+            viewLocation[1] - decorLocation[1] - padding,
+            viewLocation[0] - decorLocation[0] + view.width + padding,
+            viewLocation[1] - decorLocation[1] + view.height + padding,
+        )
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
@@ -922,7 +1157,10 @@ open class PdfActivity : AppCompatActivity() {
         private const val FRAGMENT_TAG = "pdf_viewer_fragment_tag"
         private const val PREFS_NAME = "generic_pdf_prefs"
         private const val KEY_PDF_DARK = "isPdfDark"
+        private const val KEY_ANNOTATION_INTRO_SEEN = "pdf_annotation_intro_seen"
+        private const val KEY_ANNOTATION_EDIT_SEEN = "pdf_annotation_edit_seen"
         private const val WORKING_FILE_PREFIX = "working_"
+        private const val WALKTHROUGH_DELAY_MS = 450L
 
         private const val MENU_ORIENTATION = 1
         private const val MENU_DOWNLOAD = 2
