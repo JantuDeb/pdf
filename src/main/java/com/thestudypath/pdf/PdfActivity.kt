@@ -23,6 +23,7 @@ import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.PopupMenu
@@ -55,6 +56,7 @@ import com.github.barteksc.pdfviewer.util.FitPolicy
 import com.thestudypath.pdf.walkthrough.PdfAnnotationWalkthrough
 import com.thestudypath.pdf.walkthrough.SpotlightCardPlacement
 import com.thestudypath.pdf.walkthrough.SpotlightStep
+import androidx.core.view.isVisible
 
 /**
  * A fully self-contained PDF viewing/editing activity.
@@ -109,6 +111,7 @@ open class PdfActivity : AppCompatActivity() {
     private var workingFileCleanupDone: Boolean = false
     private var annotationWalkthrough: PdfAnnotationWalkthrough? = null
     private var adLoadRequested = false
+    private var hasFallenBackToLegacyViewer = false
 
     private lateinit var legacyPdfView: PDFView
 
@@ -360,6 +363,7 @@ open class PdfActivity : AppCompatActivity() {
 
 
     private fun openPdfLegacy() {
+        hasFallenBackToLegacyViewer = true
         val sourceFile = getOriginalFile()
         if (!sourceFile.exists()) {
             Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
@@ -408,7 +412,7 @@ open class PdfActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     if (uri != null) {
                         pdfUri = uri
-                        initializePdfViewerFragment(uri)
+                        initializePdfViewerFragmentWhenReady(uri)
                     } else {
                         Toast.makeText(
                             this@PdfActivity,
@@ -438,6 +442,15 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
+    private fun initializePdfViewerFragmentWhenReady(uri: Uri) {
+        flPdfViewFragment.runWhenMeasured {
+            if (!isFinishing && !isDestroyed) {
+                initializePdfViewerFragment(uri)
+            }
+        }
+    }
+
+    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun initializePdfViewerFragment(uri: Uri) {
         val fm: FragmentManager = supportFragmentManager
         pdfViewerFragment = fm.findFragmentByTag(FRAGMENT_TAG) as? EditablePdfViewerFragment
@@ -463,6 +476,25 @@ open class PdfActivity : AppCompatActivity() {
         flPdfViewFragment.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
     }
 
+    private fun View.runWhenMeasured(action: () -> Unit) {
+        if (width > 0 && height > 0) {
+            action()
+            return
+        }
+
+        viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (width > 0 && height > 0) {
+                    if (viewTreeObserver.isAlive) {
+                        viewTreeObserver.removeOnPreDrawListener(this)
+                    }
+                    action()
+                }
+                return true
+            }
+        })
+    }
+
     // =====================================================================
     //  EDIT MODE
     // =====================================================================
@@ -479,6 +511,26 @@ open class PdfActivity : AppCompatActivity() {
         }
         fragment.onEditModeEntered = { onEditModeEntered() }
         fragment.onEditModeExited = { onEditModeExited() }
+        fragment.onDocumentLoadError = { error -> fallbackToLegacyViewer(error) }
+        fragment.onDocumentRequestFailed = { error ->
+            Log.e(TAG, "AndroidX PDF render request failed", error)
+            callbacks?.onPdfViewerError(error)
+        }
+    }
+
+    private fun fallbackToLegacyViewer(error: Throwable) {
+        if (hasFallenBackToLegacyViewer) return
+        Log.w(TAG, "AndroidX PDF failed to load; falling back to legacy viewer", error)
+        callbacks?.onPdfViewerError(error)
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
+        buttonSave.visibility = View.GONE
+        buttonCloseEdit.visibility = View.GONE
+        buttonSearch.visibility = View.GONE
+        flPdfViewFragment.visibility = View.GONE
+        legacyPdfView.visibility = View.VISIBLE
+        openPdfLegacy()
+        maybeLoadAdView()
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 13)
@@ -515,6 +567,10 @@ open class PdfActivity : AppCompatActivity() {
     private fun maybeShowAnnotationIntroWalkthrough() {
         if (!shouldShowAnnotationWalkthrough(KEY_ANNOTATION_INTRO_SEEN)) return
         if (isInEditMode) return
+        if (!isAndroidxPdfViewerVisible()) {
+            maybeLoadAdView()
+            return
+        }
 
         annotationWalkthrough?.dismiss(markFinished = false)
         val walkthrough = PdfAnnotationWalkthrough(this)
@@ -537,6 +593,10 @@ open class PdfActivity : AppCompatActivity() {
 
     private fun maybeShowEditModeWalkthrough() {
         if (!isInEditMode) return
+        if (!isAndroidxPdfViewerVisible()) {
+            maybeLoadAdView()
+            return
+        }
         if (!shouldShowAnnotationWalkthrough(KEY_ANNOTATION_EDIT_SEEN)) {
             maybeLoadAdView()
             return
@@ -586,6 +646,7 @@ open class PdfActivity : AppCompatActivity() {
 
     private fun hasPendingAnnotationWalkthrough(): Boolean {
         if (!isPdfEditingSupported()) return false
+        if (!isAndroidxPdfViewerVisible()) return false
         if (!pdfConfig.showEditButtons) return false
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         return !prefs.getBoolean(KEY_ANNOTATION_INTRO_SEEN, false) ||
@@ -594,8 +655,15 @@ open class PdfActivity : AppCompatActivity() {
 
     private fun shouldShowAnnotationWalkthrough(key: String): Boolean {
         if (!isPdfEditingSupported()) return false
+        if (!isAndroidxPdfViewerVisible()) return false
         if (!pdfConfig.showEditButtons) return false
         return !getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(key, false)
+    }
+
+    private fun isAndroidxPdfViewerVisible(): Boolean {
+        return !hasFallenBackToLegacyViewer &&
+                flPdfViewFragment.isVisible &&
+                legacyPdfView.visibility != View.VISIBLE
     }
 
     private fun markAnnotationWalkthroughSeen(key: String) {
@@ -1009,8 +1077,8 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     @SuppressLint("NewApi")
-    private fun writeDecryptedPdfToFile(sourceFile: File, targetFile: File, password: String?) {
-        if (password.isNullOrEmpty()) {
+    protected open fun writeDecryptedPdfToFile(sourceFile: File, targetFile: File, password: String?) {
+        if (password.isNullOrEmpty() || canOpenPdfWithoutPassword(sourceFile)) {
             sourceFile.copyTo(targetFile, overwrite = true)
             return
         }
@@ -1028,6 +1096,17 @@ open class PdfActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    @SuppressLint("NewApi")
+    protected fun canOpenPdfWithoutPassword(sourceFile: File): Boolean {
+        return runCatching {
+            ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
+                PdfRenderer(inputFd).use { renderer ->
+                    renderer.pageCount >= 0
+                }
+            }
+        }.getOrDefault(false)
     }
 
     // =====================================================================

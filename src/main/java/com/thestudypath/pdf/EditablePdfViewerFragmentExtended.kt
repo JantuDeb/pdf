@@ -1,17 +1,25 @@
 package com.thestudypath.pdf
 
+import android.annotation.SuppressLint
+import android.content.res.ColorStateList
 import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.util.SparseArray
+import android.util.TypedValue
 import android.view.View
+import android.view.ViewTreeObserver
+import android.widget.ProgressBar
 import androidx.annotation.RequiresExtension
 import androidx.lifecycle.lifecycleScope
 import androidx.pdf.ExperimentalPdfApi
 import androidx.pdf.PdfDocument
 import androidx.pdf.PdfWriteHandle
+import androidx.pdf.event.PdfTrackingEvent
+import androidx.pdf.event.RequestFailureEvent
+import androidx.pdf.exceptions.RequestFailedException
 import androidx.pdf.ink.EditablePdfViewerFragment
 import androidx.pdf.view.PdfView
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +41,7 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     private var viewportChangedListener: PdfView.OnViewportChangedListener? = null
     private var pendingInitialPage: Int? = null
     private var lastReportedPage: Int? = null
+    private var hasReportedRequestFailure = false
 
     var initialPage: Int = 0
     var onPageChanged: ((Int) -> Unit)? = null
@@ -44,22 +53,33 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     // UI callbacks — activity uses these to toggle save button / theme switch visibility
     var onEditModeEntered: (() -> Unit)? = null
     var onEditModeExited: (() -> Unit)? = null
+    var onDocumentLoadError: ((Throwable) -> Unit)? = null
+    var onDocumentRequestFailed: ((Throwable) -> Unit)? = null
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        view.post { applyDefaultPenSettings() }
+        if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+            tintLoadingIndicator(view)
+            view.post { applyDefaultPenSettings() }
+            view.post { keepEditFabVisible() }
+        }
     }
 
     override fun onLoadDocumentSuccess(document: PdfDocument) {
         super.onLoadDocumentSuccess(document)
         _isDocumentLoaded = true
-        val targetPage = initialPage.coerceIn(0, (document.pageCount - 1).coerceAtLeast(0))
-        pendingInitialPage = targetPage
-        viewer?.post {
-            if (!isAdded || view == null) return@post
-            viewer?.scrollToPage(targetPage)
-            emitPageChanged(targetPage)
-            pendingInitialPage = null
+        hasReportedRequestFailure = false
+        if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+            view?.post { keepEditFabVisible(EDIT_FAB_VISIBILITY_RETRY_COUNT) }
+        }
+        if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+            val targetPage = initialPage.coerceIn(0, (document.pageCount - 1).coerceAtLeast(0))
+            if (targetPage == 0) {
+                emitPageChanged(targetPage)
+            } else {
+                pendingInitialPage = targetPage
+                scrollToInitialPageWhenReady(targetPage)
+            }
         }
         Log.d(TAG, "Document loaded: ${document.pageCount} pages")
     }
@@ -68,12 +88,15 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         super.onLoadDocumentError(error)
         _isDocumentLoaded = false
         Log.e(TAG, "Document load error: $error")
+        onDocumentLoadError?.invoke(error)
     }
 
     override fun onEnterEditMode() {
         super.onEnterEditMode()
         Log.d(TAG, "Edit mode entered")
-        viewer?.post { applyDefaultPenSettings() }
+        if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+            viewer?.post { applyDefaultPenSettings() }
+        }
         onEditModeEntered?.invoke()
     }
 
@@ -81,12 +104,36 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         super.onExitEditMode()
         Log.d(TAG, "Edit mode exited")
         onEditModeExited?.invoke()
+        if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+            view?.post { keepEditFabVisible() }
+        }
     }
 
+    override fun onRequestImmersiveMode(enterImmersive: Boolean) {
+        super.onRequestImmersiveMode(enterImmersive)
+        if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS && !isEditModeEnabled) {
+            view?.post { keepEditFabVisible() }
+        }
+    }
+
+    @SuppressLint("RestrictedApi")
     @OptIn(ExperimentalPdfApi::class)
     override fun onPdfViewCreated(pdfView: PdfView) {
         super.onPdfViewCreated(pdfView)
         viewer = pdfView
+        if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+            val defaultRequestFailedListener = pdfView.requestFailedListener
+            pdfView.requestFailedListener = object : PdfView.EventListener {
+                override fun onEvent(event: PdfTrackingEvent) {
+                    defaultRequestFailedListener?.onEvent(event)
+                    if (event is RequestFailureEvent && !hasReportedRequestFailure) {
+                        hasReportedRequestFailure = true
+                        Log.e(TAG, "PDF request failed after document load", event.exception)
+                        onDocumentRequestFailed?.invoke(event.exception.asReportableRequestFailure())
+                    }
+                }
+            }
+        }
         viewportChangedListener = object : PdfView.OnViewportChangedListener {
             override fun onViewportChanged(
                 firstVisiblePage: Int,
@@ -94,9 +141,14 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
                 pageLocations: SparseArray<RectF>,
                 zoomLevel: Float,
             ) {
-                val pendingPage = pendingInitialPage
-                if (pendingPage != null && firstVisiblePage != pendingPage) {
-                    return
+                if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+                    val pendingPage = pendingInitialPage
+                    if (pendingPage != null && firstVisiblePage != pendingPage) {
+                        return
+                    }
+                }
+                if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
+                    keepEditFabVisible()
                 }
                 emitPageChanged(firstVisiblePage)
             }
@@ -106,10 +158,55 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         }
     }
 
+    @SuppressLint("RestrictedApi")
+    private fun Throwable.asReportableRequestFailure(): Throwable {
+        val requestError = this as? RequestFailedException ?: return this
+        return RuntimeException(requestError.toString(), requestError.throwable)
+    }
+
     private fun emitPageChanged(page: Int) {
         if (lastReportedPage == page) return
         lastReportedPage = page
         onPageChanged?.invoke(page)
+    }
+
+    @SuppressLint("DiscouragedApi")
+    private fun tintLoadingIndicator(rootView: View) {
+        val progressBar = rootView.findViewById<ProgressBar>(
+            requireContext().resources.getIdentifier(
+                "pdfLoadingProgressBar",
+                "id",
+                requireContext().packageName,
+            )
+        ) ?: return
+        progressBar.indeterminateTintList = ColorStateList.valueOf(resolveThemeColor())
+    }
+
+    private fun resolveThemeColor(): Int {
+        val typedValue = TypedValue()
+        val theme = requireContext().theme
+        val colorAttr = androidx.appcompat.R.attr.colorPrimary
+        return if (theme.resolveAttribute(colorAttr, typedValue, true)) {
+            typedValue.data
+        } else {
+            requireContext().getColor(android.R.color.holo_blue_light)
+        }
+    }
+
+    private fun scrollToInitialPageWhenReady(targetPage: Int) {
+        val pdfView = viewer ?: return
+        pdfView.runWhenMeasured {
+            pdfView.post {
+                if (!isAdded || view == null || pendingInitialPage != targetPage) return@post
+                if (pdfView.width <= 0 || pdfView.height <= 0) {
+                    scrollToInitialPageWhenReady(targetPage)
+                    return@post
+                }
+                pdfView.scrollToPage(targetPage)
+                emitPageChanged(targetPage)
+                pendingInitialPage = null
+            }
+        }
     }
 
     private fun applyDefaultPenSettings() {
@@ -182,6 +279,18 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
             type = type.superclass
         }
         throw NoSuchMethodException(name)
+    }
+
+    private fun keepEditFabVisible(attemptsRemaining: Int = 0) {
+        if (isEditModeEnabled) return
+        val root = view ?: return
+        isToolboxVisible = true
+        if (!isToolboxVisible && attemptsRemaining > 0) {
+            root.postDelayed(
+                { keepEditFabVisible(attemptsRemaining - 1) },
+                EDIT_FAB_VISIBILITY_RETRY_DELAY_MS,
+            )
+        }
     }
 
     fun saveAnnotations(outputFile: File) {
@@ -266,14 +375,43 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         pendingOutputFile = null
         pendingInitialPage = null
         lastReportedPage = null
+        onDocumentLoadError = null
+        onDocumentRequestFailed = null
+        hasReportedRequestFailure = false
         super.onDestroyView()
     }
 
+    private fun View.runWhenMeasured(action: () -> Unit) {
+        if (width > 0 && height > 0) {
+            action()
+            return
+        }
+
+        viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (width > 0 && height > 0) {
+                    if (viewTreeObserver.isAlive) {
+                        viewTreeObserver.removeOnPreDrawListener(this)
+                    }
+                    action()
+                }
+                return true
+            }
+        })
+    }
+
     companion object {
+        /**
+         * Flip to false for release/internal-test builds that should use AndroidX PDF with no
+         * StudyPath hooks into its internal fragment/PdfView implementation.
+         */
+        private const val ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS = true
         private const val TAG = "EditablePdfFragment"
         private const val DEFAULT_PEN_COLOR = 0xFF202FB0.toInt()
         private const val DEFAULT_PEN_COLOR_INDEX = 1
         private const val DEFAULT_PEN_THICKNESS = 8f
         private const val DEFAULT_PEN_THICKNESS_INDEX = 0
+        private const val EDIT_FAB_VISIBILITY_RETRY_COUNT = 8
+        private const val EDIT_FAB_VISIBILITY_RETRY_DELAY_MS = 150L
     }
 }

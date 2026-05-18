@@ -42,6 +42,9 @@ interface PdfActivityCallbacks {
     /** Called when annotations fail to save. */
     fun onAnnotationSaveFailed(error: Throwable) {}
 
+    /** Called when the AndroidX PDF viewer reports a load or render/fetch failure. */
+    fun onPdfViewerError(error: Throwable) {}
+
     /** Called after a PDF download completes successfully. */
     fun onDownloadSucceeded(displayName: String, fileUri: Uri) {}
 
