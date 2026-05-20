@@ -63,7 +63,6 @@ dependencies {
     implementation libs.lifecycle.runtime.ktx
 
     // Ads
-    implementation libs.play.services.ads
     
     // Firebase
     implementation platform(libs.firebase.bom)
