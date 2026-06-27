@@ -42,8 +42,11 @@ interface PdfActivityCallbacks {
     /** Called when annotations fail to save. */
     fun onAnnotationSaveFailed(error: Throwable) {}
 
-    /** Called when the AndroidX PDF viewer reports a load or render/fetch failure. */
-    fun onPdfViewerError(error: Throwable) {}
+    /** Called when the AndroidX PDF viewer reports a recoverable load or render/fetch failure. */
+    fun onPdfViewerError(error: Throwable, recovery: PdfViewerRecovery) {}
+
+    /** Called when the active viewer ultimately fails to open/render the PDF. */
+    fun onPdfOpenFailed(error: Throwable, viewer: PdfViewerType) {}
 
     /** Called after a PDF download completes successfully. */
     fun onDownloadSucceeded(displayName: String, fileUri: Uri) {}
@@ -104,4 +107,15 @@ interface PagePersistence {
 enum class PdfMenuAction {
     DOWNLOAD,
     CHANGE_ORIENTATION
+}
+
+enum class PdfViewerRecovery {
+    CONTINUE,
+    LEGACY_FALLBACK,
+}
+
+enum class PdfViewerType {
+    SOURCE_PREPARATION,
+    ANDROIDX,
+    LEGACY,
 }

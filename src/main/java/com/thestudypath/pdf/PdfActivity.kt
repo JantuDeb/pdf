@@ -43,6 +43,8 @@ import com.google.android.material.materialswitch.MaterialSwitch
 import com.thestudypath.pdf.interfaces.PdfActivityCallbacks
 import com.thestudypath.pdf.interfaces.PdfAnnotationSaver
 import com.thestudypath.pdf.interfaces.PdfMenuAction
+import com.thestudypath.pdf.interfaces.PdfViewerRecovery
+import com.thestudypath.pdf.interfaces.PdfViewerType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -351,6 +353,9 @@ open class PdfActivity : AppCompatActivity() {
                 }
 
                 val message = error?.message ?: "Failed to open PDF"
+                error?.let {
+                    callbacks?.onPdfOpenFailed(it, PdfViewerType.SOURCE_PREPARATION)
+                }
                 Toast.makeText(this@PdfActivity, message, Toast.LENGTH_SHORT).show()
                 return@launch
             }
@@ -388,7 +393,10 @@ open class PdfActivity : AppCompatActivity() {
                 }
                 .enableAnnotationRendering(true)
                 .onRender { legacyPdfView.fitToWidth(currentPage) }
-                .onError { t: Throwable -> Log.d(TAG, " onError" + t.message) }
+                .onError { error ->
+                    Log.e(TAG, "Legacy PDF viewer failed", error)
+                    callbacks?.onPdfOpenFailed(error, PdfViewerType.LEGACY)
+                }
                 .scrollHandle(DefaultScrollHandle(this)).swipeHorizontal(false)
                 .enableAntialiasing(true)
                 .spacing(10).pageFitPolicy(FitPolicy.WIDTH).load()
@@ -437,6 +445,7 @@ open class PdfActivity : AppCompatActivity() {
             getUriForFile(workingFile)
         } catch (e: Exception) {
             e.printStackTrace()
+            callbacks?.onPdfOpenFailed(e, PdfViewerType.SOURCE_PREPARATION)
             null
         }
     }
@@ -514,14 +523,14 @@ open class PdfActivity : AppCompatActivity() {
         fragment.onDocumentLoadError = { error -> fallbackToLegacyViewer(error) }
         fragment.onDocumentRequestFailed = { error ->
             Log.e(TAG, "AndroidX PDF render request failed", error)
-            callbacks?.onPdfViewerError(error)
+            callbacks?.onPdfViewerError(error, PdfViewerRecovery.CONTINUE)
         }
     }
 
     private fun fallbackToLegacyViewer(error: Throwable) {
         if (hasFallenBackToLegacyViewer) return
         Log.w(TAG, "AndroidX PDF failed to load; falling back to legacy viewer", error)
-        callbacks?.onPdfViewerError(error)
+        callbacks?.onPdfViewerError(error, PdfViewerRecovery.LEGACY_FALLBACK)
         annotationWalkthrough?.dismiss(markFinished = false)
         annotationWalkthrough = null
         buttonSave.visibility = View.GONE
