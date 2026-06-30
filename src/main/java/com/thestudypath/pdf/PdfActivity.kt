@@ -123,6 +123,7 @@ open class PdfActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        removeRestoredPdfViewerFragment()
         setContentView(getLayoutResId())
 
         // 1. Let subclass / host provide configuration
@@ -461,28 +462,41 @@ open class PdfActivity : AppCompatActivity() {
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun initializePdfViewerFragment(uri: Uri) {
-        val fm: FragmentManager = supportFragmentManager
-        pdfViewerFragment = fm.findFragmentByTag(FRAGMENT_TAG) as? EditablePdfViewerFragment
+        try {
+            val fm: FragmentManager = supportFragmentManager
+            pdfViewerFragment = fm.findFragmentByTag(FRAGMENT_TAG) as? EditablePdfViewerFragment
 
-        if (pdfViewerFragment == null) {
-            val fragment = EditablePdfViewerFragmentExtended()
-            pdfViewerFragment = fragment
+            if (pdfViewerFragment == null) {
+                val fragment = EditablePdfViewerFragmentExtended()
+                pdfViewerFragment = fragment
 
-            fm.beginTransaction()
-                .replace(R.id.fragment_pdf_container, fragment, FRAGMENT_TAG)
-                .commitAllowingStateLoss()
-            fm.executePendingTransactions()
+                fm.beginTransaction()
+                    .replace(R.id.fragment_pdf_container, fragment, FRAGMENT_TAG)
+                    .commitAllowingStateLoss()
+                fm.executePendingTransactions()
 
-            setupEditModeCallbacks(fragment)
+                setupEditModeCallbacks(fragment)
 //            fragment.markDocumentLoaded()
-        } else {
-            (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.let {
-                setupEditModeCallbacks(it)
+            } else {
+                (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.let {
+                    setupEditModeCallbacks(it)
+                }
             }
-        }
 
-        pdfViewerFragment?.documentUri = uri
-        flPdfViewFragment.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
+            pdfViewerFragment?.documentUri = uri
+            flPdfViewFragment.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
+        } catch (error: Throwable) {
+            fallbackToLegacyViewer(error)
+        }
+    }
+
+    private fun removeRestoredPdfViewerFragment() {
+        supportFragmentManager.findFragmentByTag(FRAGMENT_TAG)?.let { fragment ->
+            supportFragmentManager.beginTransaction()
+                .remove(fragment)
+                .commitAllowingStateLoss()
+            supportFragmentManager.executePendingTransactions()
+        }
     }
 
     private fun View.runWhenMeasured(action: () -> Unit) {
