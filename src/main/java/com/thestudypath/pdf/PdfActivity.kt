@@ -423,11 +423,9 @@ open class PdfActivity : AppCompatActivity() {
                         pdfUri = uri
                         initializePdfViewerFragmentWhenReady(uri)
                     } else {
-                        Toast.makeText(
-                            this@PdfActivity,
-                            "Failed to open PDF",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        fallbackToLegacyViewer(
+                            IllegalStateException("Failed to prepare decrypted PDF source")
+                        )
                     }
                 }
             }
