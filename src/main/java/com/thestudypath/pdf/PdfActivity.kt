@@ -39,7 +39,6 @@ import androidx.fragment.app.FragmentManager
 import androidx.lifecycle.lifecycleScope
 import androidx.pdf.ink.EditablePdfViewerFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.materialswitch.MaterialSwitch
 import com.thestudypath.pdf.interfaces.PdfActivityCallbacks
 import com.thestudypath.pdf.interfaces.PdfAnnotationSaver
 import com.thestudypath.pdf.interfaces.PdfMenuAction
@@ -93,7 +92,8 @@ open class PdfActivity : AppCompatActivity() {
     // ── Views ─────────────────────────────────────────────────────────────
     private lateinit var constraintLayoutPdfHeader: View
     private lateinit var adContainer: FrameLayout
-    private lateinit var materialSwitch: MaterialSwitch
+    private lateinit var themeToggleContainer: View
+    private lateinit var materialSwitch: ImageButton
     private lateinit var buttonBack: ImageButton
     private lateinit var buttonSave: ImageButton
     private lateinit var buttonCloseEdit: ImageButton
@@ -274,7 +274,8 @@ open class PdfActivity : AppCompatActivity() {
 
         constraintLayoutPdfHeader = findViewById(R.id.pdf_top_header)
         adContainer = findViewById(R.id.fl_adplaceholder)
-        materialSwitch = findViewById(R.id.material_switch)
+        themeToggleContainer = findViewById(R.id.material_switch)
+        materialSwitch = findViewById(com.studypath.core.R.id.theme_toggle_button)
         textViewTitle = findViewById(R.id.text_title)
         buttonBack = findViewById(R.id.btn_back)
         buttonSave = findViewById(R.id.btn_save_exit)
@@ -308,7 +309,7 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     private fun applyFeatureFlags() {
-        if (!pdfConfig.showNightModeToggle) materialSwitch.visibility = View.GONE
+        if (!pdfConfig.showNightModeToggle) themeToggleContainer.visibility = View.GONE
         if (!pdfConfig.showSearchButton) buttonSearch.visibility = View.GONE
         if (!pdfConfig.showFullscreenButton) buttonFullscreen.visibility = View.GONE
         if (!pdfConfig.showEditButtons) {
@@ -560,7 +561,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonSave.visibility = if (pdfConfig.showEditButtons) View.VISIBLE else View.GONE
         buttonCloseEdit.visibility = if (pdfConfig.showEditButtons) View.VISIBLE else View.GONE
         buttonBack.visibility = View.GONE
-        materialSwitch.visibility = View.GONE
+        themeToggleContainer.visibility = View.GONE
         buttonSearch.visibility = View.GONE
         pdfViewerFragment?.isTextSearchActive = false
         callbacks?.onEditModeChanged(true)
@@ -576,7 +577,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonSave.visibility = View.GONE
         buttonCloseEdit.visibility = View.GONE
         buttonBack.visibility = View.VISIBLE
-        if (pdfConfig.showNightModeToggle) materialSwitch.visibility = View.VISIBLE
+        if (pdfConfig.showNightModeToggle) themeToggleContainer.visibility = View.VISIBLE
         if (pdfConfig.showSearchButton) buttonSearch.visibility = View.VISIBLE
         callbacks?.onEditModeChanged(false)
     }
@@ -908,17 +909,26 @@ open class PdfActivity : AppCompatActivity() {
         isNight = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getBoolean(KEY_PDF_DARK, false)
 
-        materialSwitch.isChecked = isNight
+        updateNightModeIcon()
         applyNightMode(isNight)
 
-        materialSwitch.setOnCheckedChangeListener { _, isChecked ->
+        materialSwitch.setOnClickListener {
+            val isChecked = !isNight
             isNight = isChecked
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit {
                     putBoolean(KEY_PDF_DARK, isChecked)
                 }
+            updateNightModeIcon()
             applyNightMode(isChecked)
         }
+    }
+
+    private fun updateNightModeIcon() {
+        materialSwitch.setImageResource(
+            if (isNight) com.studypath.core.R.drawable.ic_light_mode
+            else com.studypath.core.R.drawable.ic_night_mode
+        )
     }
 
     private fun applyNightMode(enabled: Boolean) {
