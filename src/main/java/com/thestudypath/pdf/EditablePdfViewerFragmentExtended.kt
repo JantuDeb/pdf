@@ -26,6 +26,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Extended EditablePdfViewerFragment with correct annotation save flow.
@@ -320,17 +323,22 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         }
 
         lifecycleScope.launch(Dispatchers.IO) {
+            val tempOutputFile = File(
+                outputFile.parentFile,
+                "${outputFile.name}.annotations.${System.nanoTime()}.tmp",
+            )
             try {
-                val fd = ParcelFileDescriptor.open(
-                    outputFile,
-                    ParcelFileDescriptor.MODE_CREATE or
-                            ParcelFileDescriptor.MODE_READ_WRITE or
-                            ParcelFileDescriptor.MODE_TRUNCATE
-                )
-
-                handle.writeTo(fd)
-                fd.close()
-                handle.close()
+                handle.use { writeHandle ->
+                    ParcelFileDescriptor.open(
+                        tempOutputFile,
+                        ParcelFileDescriptor.MODE_CREATE or
+                                ParcelFileDescriptor.MODE_READ_WRITE or
+                                ParcelFileDescriptor.MODE_TRUNCATE
+                    ).use { fd ->
+                        writeHandle.writeTo(fd)
+                    }
+                }
+                replaceFile(tempOutputFile, outputFile)
 
                 withContext(Dispatchers.Main) {
                     isEditModeEnabled = false
@@ -343,13 +351,30 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Write failed: ${e.message}", e)
-                handle.close()
                 withContext(Dispatchers.Main) {
                     onSaveError?.invoke(e)
                 }
             } finally {
+                tempOutputFile.delete()
                 pendingOutputFile = null
             }
+        }
+    }
+
+    private fun replaceFile(sourceFile: File, targetFile: File) {
+        try {
+            Files.move(
+                sourceFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(
+                sourceFile.toPath(),
+                targetFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
         }
     }
 

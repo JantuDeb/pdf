@@ -48,6 +48,15 @@ dependencies {
     implementation libs.pdf.viewer.fragment
     implementation libs.pdf.ink
 
+    // pdf-ink alpha19 still resolves Ink 1.0.0, whose V33 renderer can close
+    // while a queued draw is pending. Keep the Ink family aligned on the
+    // lifecycle-fixed release.
+    def inkVersion = libs.versions.ink.get()
+    implementation "androidx.ink:ink-authoring:$inkVersion"
+    implementation "androidx.ink:ink-brush:$inkVersion"
+    implementation "androidx.ink:ink-geometry:$inkVersion"
+    implementation "androidx.ink:ink-strokes:$inkVersion"
+
     //Legacy Pdf library
     implementation libs.androidpdfviewer
 

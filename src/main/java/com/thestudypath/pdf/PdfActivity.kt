@@ -36,6 +36,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentManager
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.pdf.ink.EditablePdfViewerFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -44,12 +45,13 @@ import com.thestudypath.pdf.interfaces.PdfAnnotationSaver
 import com.thestudypath.pdf.interfaces.PdfMenuAction
 import com.thestudypath.pdf.interfaces.PdfViewerRecovery
 import com.thestudypath.pdf.interfaces.PdfViewerType
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import androidx.core.content.edit
 import com.github.barteksc.pdfviewer.PDFView
 import com.github.barteksc.pdfviewer.scroll.DefaultScrollHandle
@@ -58,6 +60,8 @@ import com.thestudypath.pdf.walkthrough.PdfAnnotationWalkthrough
 import com.thestudypath.pdf.walkthrough.SpotlightCardPlacement
 import com.thestudypath.pdf.walkthrough.SpotlightStep
 import androidx.core.view.isVisible
+import androidx.core.view.size
+import androidx.core.view.get
 
 /**
  * A fully self-contained PDF viewing/editing activity.
@@ -109,7 +113,7 @@ open class PdfActivity : AppCompatActivity() {
     private var isInEditMode = false
     private var isNight = false
     private var currentPage: Int = 0
-    private var pdfUri: Uri? = null
+    private var pendingPdfUri: Uri? = null
     private var workingFileCleanupDone: Boolean = false
     private var annotationWalkthrough: PdfAnnotationWalkthrough? = null
     private var adLoadRequested = false
@@ -174,10 +178,16 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        pendingPdfUri = null
         annotationWalkthrough?.dismiss(markFinished = false)
         annotationWalkthrough = null
         cleanupWorkingFile("onDestroy")
         super.onDestroy()
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        tryInitializePendingPdfViewer()
     }
 
     override fun onStop() {
@@ -327,41 +337,84 @@ open class PdfActivity : AppCompatActivity() {
         lifecycleScope.launch {
             while (true) {
                 val prepareResult = withContext(Dispatchers.IO) { preparePdfSource() }
-                if (prepareResult.isSuccess) {
-                    if (isPdfEditingSupported()) {
-                        openPdf()
-                    } else {
-                        Toast.makeText(
-                            this@PdfActivity,
-                            "PDF annotation not supported on this device",
-                            Toast.LENGTH_LONG
-                        ).show()
-                        openPdfLegacy()
-                    }
-                    return@launch
-                }
-
-                val error = prepareResult.exceptionOrNull()
-                if (error is PdfPasswordRequiredException) {
-                    val password = requestPdfPassword(error.isIncorrectPassword)
-                    if (password == null) {
-                        onPdfPasswordRequestCancelled()
+                val preparationError = prepareResult.exceptionOrNull()
+                if (preparationError != null) {
+                    if (preparationError is PdfPasswordRequiredException) {
+                        if (requestUpdatedPassword(preparationError)) {
+                            continue
+                        }
                         return@launch
                     }
 
-                    pdfConfig = pdfConfig.copy(password = password)
-                    onPdfPasswordUpdated(password)
-                    continue
+                    callbacks?.onPdfOpenFailed(
+                        preparationError,
+                        PdfViewerType.SOURCE_PREPARATION
+                    )
+                    Toast.makeText(
+                        this@PdfActivity,
+                        preparationError.message ?: "Failed to open PDF",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@launch
                 }
 
-                val message = error?.message ?: "Failed to open PDF"
-                error?.let {
-                    callbacks?.onPdfOpenFailed(it, PdfViewerType.SOURCE_PREPARATION)
+                if (!isPdfEditingSupported()) {
+                    Toast.makeText(
+                        this@PdfActivity,
+                        "PDF annotation not supported on this device",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    openPdfLegacy()
+                    return@launch
                 }
-                Toast.makeText(this@PdfActivity, message, Toast.LENGTH_SHORT).show()
+
+                val sourceFile = getOriginalFile()
+                val uriResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        if (!sourceFile.exists()) {
+                            throw IOException("PDF source file was not found")
+                        }
+                        prepareDecryptedPdfUri(sourceFile, pdfConfig.password)
+                    }
+                }
+                val error = uriResult.exceptionOrNull()
+                if (error is PdfPasswordRequiredException) {
+                    if (requestUpdatedPassword(error)) {
+                        continue
+                    }
+                    return@launch
+                }
+                if (error != null) {
+                    callbacks?.onPdfOpenFailed(error, PdfViewerType.SOURCE_PREPARATION)
+                    fallbackToLegacyViewer(error)
+                    return@launch
+                }
+
+                val uri = uriResult.getOrThrow()
+                initializePdfViewerFragmentWhenReady(uri)
                 return@launch
             }
         }
+    }
+
+    private suspend fun requestUpdatedPassword(error: PdfPasswordRequiredException): Boolean {
+        val resumedState = lifecycle.currentStateFlow.first { state ->
+            state == Lifecycle.State.DESTROYED ||
+                state.isAtLeast(Lifecycle.State.RESUMED)
+        }
+        if (!resumedState.isAtLeast(Lifecycle.State.RESUMED)) {
+            return false
+        }
+
+        val password = requestPdfPassword(error.isIncorrectPassword)
+        if (password.isNullOrEmpty()) {
+            onPdfPasswordRequestCancelled()
+            return false
+        }
+
+        pdfConfig = pdfConfig.copy(password = password)
+        onPdfPasswordUpdated(password)
+        return true
     }
 
     private fun isPdfEditingSupported(): Boolean {
@@ -409,51 +462,44 @@ open class PdfActivity : AppCompatActivity() {
         }
     }
 
-    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
-    private fun openPdf() {
-        try {
-            val sourceFile = getOriginalFile()
-            if (!sourceFile.exists()) {
-                Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
-                return
-            }
-            CoroutineScope(Dispatchers.IO).launch {
-                val uri = prepareDecryptedPdfUri(sourceFile, pdfConfig.password)
-                withContext(Dispatchers.Main) {
-                    if (uri != null) {
-                        pdfUri = uri
-                        initializePdfViewerFragmentWhenReady(uri)
-                    } else {
-                        fallbackToLegacyViewer(
-                            IllegalStateException("Failed to prepare decrypted PDF source")
-                        )
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
     @SuppressLint("NewApi")
-    private fun prepareDecryptedPdfUri(sourceFile: File, password: String?): Uri? {
-        return try {
-            val workingFile = getWorkingFile()
-
-            writeDecryptedPdfToFile(sourceFile, workingFile, password)
-
-            getUriForFile(workingFile)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            callbacks?.onPdfOpenFailed(e, PdfViewerType.SOURCE_PREPARATION)
-            null
+    private fun prepareDecryptedPdfUri(sourceFile: File, password: String?): Uri {
+        val workingFile = getWorkingFile()
+        if (workingFile.exists() && !workingFile.delete()) {
+            throw IOException("Unable to replace the previous prepared PDF")
         }
+        writeDecryptedPdfToFile(sourceFile, workingFile, password)
+        return getUriForFile(workingFile)
+            ?: throw IOException("Unable to create a URI for the prepared PDF")
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun initializePdfViewerFragmentWhenReady(uri: Uri) {
+        pendingPdfUri = uri
+        tryInitializePendingPdfViewer()
+    }
+
+    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
+    private fun tryInitializePendingPdfViewer() {
+        val uri = pendingPdfUri ?: return
+        if (
+            isFinishing ||
+                isDestroyed ||
+                !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) ||
+                supportFragmentManager.isStateSaved
+        ) {
+            return
+        }
+
         flPdfViewFragment.runWhenMeasured {
-            if (!isFinishing && !isDestroyed) {
+            if (
+                pendingPdfUri == uri &&
+                    !isFinishing &&
+                    !isDestroyed &&
+                    lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                    !supportFragmentManager.isStateSaved
+            ) {
+                pendingPdfUri = null
                 initializePdfViewerFragment(uri)
             }
         }
@@ -471,8 +517,7 @@ open class PdfActivity : AppCompatActivity() {
 
                 fm.beginTransaction()
                     .replace(R.id.fragment_pdf_container, fragment, FRAGMENT_TAG)
-                    .commitAllowingStateLoss()
-                fm.executePendingTransactions()
+                    .commitNow()
 
                 setupEditModeCallbacks(fragment)
 //            fragment.markDocumentLoaded()
@@ -542,6 +587,7 @@ open class PdfActivity : AppCompatActivity() {
 
     private fun fallbackToLegacyViewer(error: Throwable) {
         if (hasFallenBackToLegacyViewer) return
+        pendingPdfUri = null
         Log.w(TAG, "AndroidX PDF failed to load; falling back to legacy viewer", error)
         callbacks?.onPdfViewerError(error, PdfViewerRecovery.LEGACY_FALLBACK)
         annotationWalkthrough?.dismiss(markFinished = false)
@@ -980,6 +1026,7 @@ open class PdfActivity : AppCompatActivity() {
 
         if (customMenuResId != null) {
             popup.menuInflater.inflate(customMenuResId, popup.menu)
+            applyConfiguredMenuVisibility(popup.menu)
         } else {
             buildDefaultPopupMenu(popup.menu)
         }
@@ -1000,6 +1047,24 @@ open class PdfActivity : AppCompatActivity() {
             true
         }
         popup.show()
+    }
+
+    private fun applyConfiguredMenuVisibility(menu: Menu) {
+        for (index in 0 until menu.size) {
+            val item = menu[index]
+            val action = resolveDefaultMenuAction(item.itemId)
+                ?: callbacks?.mapMenuItemToAction(item.itemId, item.title)
+
+            when (action) {
+                PdfMenuAction.CHANGE_ORIENTATION ->
+                    item.isVisible = pdfConfig.showOrientationOption
+
+                PdfMenuAction.DOWNLOAD ->
+                    item.isVisible = pdfConfig.showDownloadOption
+
+                null -> Unit
+            }
+        }
     }
 
     private fun buildDefaultPopupMenu(menu: Menu) {
@@ -1050,7 +1115,7 @@ open class PdfActivity : AppCompatActivity() {
 
         Toast.makeText(this, "PDF is being downloaded…", Toast.LENGTH_SHORT).show()
 
-        CoroutineScope(Dispatchers.IO).launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             val downloadedFileUri = decryptAndCopyToDownloads(
                 sourceFile,
                 pdfConfig.displayName ?: pdfConfig.fileName,
@@ -1109,9 +1174,12 @@ open class PdfActivity : AppCompatActivity() {
 
     @SuppressLint("NewApi")
     protected open fun writeDecryptedPdfToFile(sourceFile: File, targetFile: File, password: String?) {
-        if (password.isNullOrEmpty() || canOpenPdfWithoutPassword(sourceFile)) {
+        if (canOpenPdfWithoutPassword(sourceFile)) {
             sourceFile.copyTo(targetFile, overwrite = true)
             return
+        }
+        if (password.isNullOrEmpty()) {
+            throw PdfPasswordRequiredException()
         }
 
         ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
