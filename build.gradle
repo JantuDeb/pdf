@@ -1,8 +1,6 @@
 plugins {
     alias libs.plugins.android.library
-    alias libs.plugins.jetbrains.kotlin.android
-    id 'kotlin-parcelize'
-    id 'kotlin-kapt'
+    alias libs.plugins.jetbrains.kotlin.parcelize
 }
 
 android {
@@ -25,9 +23,6 @@ android {
         coreLibraryDesugaringEnabled true
         sourceCompatibility JavaVersion.VERSION_21
         targetCompatibility JavaVersion.VERSION_21
-    }
-    kotlinOptions {
-        jvmTarget = '21'
     }
     buildFeatures {
         buildConfig true
