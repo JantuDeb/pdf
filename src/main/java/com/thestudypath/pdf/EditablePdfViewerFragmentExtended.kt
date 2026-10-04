@@ -1,3 +1,5 @@
+@file:OptIn(androidx.pdf.ExperimentalPdfApi::class)
+
 package com.thestudypath.pdf
 
 import android.annotation.SuppressLint
@@ -220,10 +222,10 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     private fun applyDefaultPenToDocumentViewModel() {
         runCatching {
             val viewModel = findNoArgMethod("getDocumentViewModel").invoke(this)
-            val penTool = Class.forName("androidx.pdf.ink.view.tool.Pen")
+            val penTool = Class.forName("androidx.pdf.view.annotation.tool.Pen")
                 .getConstructor(Float::class.javaPrimitiveType, Int::class.javaPrimitiveType)
                 .newInstance(DEFAULT_PEN_THICKNESS, DEFAULT_PEN_COLOR)
-            val toolInfoClass = Class.forName("androidx.pdf.ink.view.tool.AnnotationToolInfo")
+            val toolInfoClass = Class.forName("androidx.pdf.view.annotation.tool.AnnotationToolInfo")
             viewModel.javaClass
                 .getDeclaredMethod($$"setCurrentToolInfo$pdf_ink", toolInfoClass)
                 .apply { isAccessible = true }
@@ -249,14 +251,14 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
                 .apply { isAccessible = true }
                 .get(toolbar) as List<*>
             val selectedPaletteItem = penPaletteItems[DEFAULT_PEN_COLOR_INDEX]
-            val toolbarIntentClass = Class.forName("androidx.pdf.ink.view.state.ToolbarIntent")
+            val toolbarIntentClass = Class.forName("androidx.pdf.view.annotation.state.ToolbarIntent")
             val colorIntent = Class
-                .forName("androidx.pdf.ink.view.state.ToolbarIntent\$ColorSelected")
+                .forName("androidx.pdf.view.annotation.state.ToolbarIntent\$ColorSelected")
                 .constructors
                 .first { it.parameterTypes.size == 2 }
                 .newInstance(DEFAULT_PEN_COLOR_INDEX, selectedPaletteItem)
             val brushIntent = Class
-                .forName("androidx.pdf.ink.view.state.ToolbarIntent\$BrushSizeChanged")
+                .forName("androidx.pdf.view.annotation.state.ToolbarIntent\$BrushSizeChanged")
                 .constructors
                 .first { it.parameterTypes.size == 1 }
                 .newInstance(DEFAULT_PEN_THICKNESS_INDEX)

@@ -1,3 +1,5 @@
+@file:OptIn(androidx.pdf.ExperimentalPdfApi::class)
+
 package com.thestudypath.pdf
 
 import android.annotation.SuppressLint
