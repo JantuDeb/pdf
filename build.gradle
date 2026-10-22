@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace 'com.thestudypath.pdf'
-    compileSdkVersion "android-36.1"
+    compileSdk 37
 
     defaultConfig {
         minSdk 31
@@ -28,7 +28,7 @@ android {
         buildConfig true
     }
     lint {
-        targetSdk 36
+        targetSdk 37
     }
 }
 
