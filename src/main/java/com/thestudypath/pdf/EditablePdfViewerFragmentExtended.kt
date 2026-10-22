@@ -137,6 +137,8 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     override fun onPdfViewCreated(pdfView: PdfView) {
         super.onPdfViewCreated(pdfView)
         viewer = pdfView
+        // Paint the gaps inside the filtered layer so they follow the PDF theme.
+        pdfView.setBackgroundResource(R.color.pdf_viewport_background)
         val pageSpacing = resources.getDimensionPixelSize(R.dimen.pdf_page_separator)
         pdfView.verticalPageSpacing = pageSpacing
         pdfView.horizontalPageSpacing = pageSpacing

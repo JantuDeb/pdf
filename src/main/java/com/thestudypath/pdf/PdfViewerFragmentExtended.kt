@@ -13,6 +13,7 @@ class PdfViewerFragmentExtended : PdfViewerFragment() {
     @OptIn(ExperimentalPdfApi::class)
     override fun onPdfViewCreated(pdfView: PdfView) {
         super.onPdfViewCreated(pdfView)
+        pdfView.setBackgroundResource(R.color.pdf_viewport_background)
         val pageSpacing = resources.getDimensionPixelSize(R.dimen.pdf_page_separator)
         pdfView.verticalPageSpacing = pageSpacing
         pdfView.horizontalPageSpacing = pageSpacing

@@ -142,6 +142,7 @@
 
     <com.github.barteksc.pdfviewer.PDFView
         android:id="@+id/legacy_pdf_view"
+        android:background="@color/pdf_viewport_background"
         android:layout_width="0dp"
         android:layout_height="0dp"
         app:layout_constraintBottom_toTopOf="@id/fl_adplaceholder"
