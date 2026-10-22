@@ -4,6 +4,7 @@ package com.thestudypath.pdf
 
 import android.annotation.SuppressLint
 import android.content.res.ColorStateList
+import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
@@ -42,6 +43,7 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     val isDocumentLoaded: Boolean get() = _isDocumentLoaded
 
     private var viewer: PdfView? = null
+    private var nightModePaint: Paint? = null
     private var pendingOutputFile: File? = null
     private var viewportChangedListener: PdfView.OnViewportChangedListener? = null
     private var pendingInitialPage: Int? = null
@@ -60,6 +62,15 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     var onEditModeExited: (() -> Unit)? = null
     var onDocumentLoadError: ((Throwable) -> Unit)? = null
     var onDocumentRequestFailed: ((Throwable) -> Unit)? = null
+
+    /** Filter document rendering without recoloring the editor's buttons/toolbars. */
+    fun setNightModePaint(paint: Paint?) {
+        nightModePaint = paint
+        viewer?.setLayerType(
+            if (paint != null) View.LAYER_TYPE_HARDWARE else View.LAYER_TYPE_NONE,
+            paint,
+        )
+    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -129,6 +140,7 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         val pageSpacing = resources.getDimensionPixelSize(R.dimen.pdf_page_separator)
         pdfView.verticalPageSpacing = pageSpacing
         pdfView.horizontalPageSpacing = pageSpacing
+        setNightModePaint(nightModePaint)
         if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
             val defaultRequestFailedListener = pdfView.requestFailedListener
             pdfView.requestFailedListener = object : PdfView.EventListener {

@@ -439,7 +439,8 @@ open class PdfActivity : AppCompatActivity() {
             legacyPdfView.fromFile(sourceFile)
                 .enableSwipe(true)
                 .defaultPage(currentPage)
-                .nightMode(isNight)
+                // Use the same color-preserving filter as the modern renderer.
+                .nightMode(false)
                 .enableSwipe(true)
                 .swipeHorizontal(false)
                 .enableDoubletap(true)
@@ -529,6 +530,7 @@ open class PdfActivity : AppCompatActivity() {
                 }
             }
 
+            applyNightMode(isNight)
             pdfViewerFragment?.documentUri = uri
             flPdfViewFragment.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
         } catch (error: Throwable) {
@@ -980,23 +982,30 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     private fun applyNightMode(enabled: Boolean) {
-        val container = findViewById<FrameLayout>(R.id.fragment_pdf_container) ?: return
-        if (enabled) {
-            val invertMatrix = ColorMatrix(
+        val paint = if (enabled) {
+            // Invert luminance, retaining a softened version of the original hue.
+            // Full RGB inversion turns blue headings into harsh yellow/orange.
+            // Map white paper to charcoal (32) and black text to off-white (232).
+            val chroma = 0.55f
+            val contrast = 200f / 255f
+            val red = (chroma + contrast) * 0.2126f
+            val green = (chroma + contrast) * 0.7152f
+            val blue = (chroma + contrast) * 0.0722f
+            val nightMatrix = ColorMatrix(
                 floatArrayOf(
-                    -1f, 0f, 0f, 0f, 255f,
-                    0f, -1f, 0f, 0f, 255f,
-                    0f, 0f, -1f, 0f, 255f,
+                    chroma - red, -green, -blue, 0f, 232f,
+                    -red, chroma - green, -blue, 0f, 232f,
+                    -red, -green, chroma - blue, 0f, 232f,
                     0f, 0f, 0f, 1f, 0f
                 )
             )
-            val paint = Paint().apply {
-                colorFilter = ColorMatrixColorFilter(invertMatrix)
+            Paint().apply {
+                colorFilter = ColorMatrixColorFilter(nightMatrix)
             }
-            container.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
-        } else {
-            container.setLayerType(View.LAYER_TYPE_NONE, null)
-        }
+        } else null
+        val layerType = if (enabled) View.LAYER_TYPE_HARDWARE else View.LAYER_TYPE_NONE
+        (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.setNightModePaint(paint)
+        legacyPdfView.setLayerType(layerType, paint)
     }
 
     // =====================================================================
@@ -1298,9 +1307,11 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     private fun applyStatusBarStyle() {
-        // Light status bar icons when in light theme
+        // The PDF inversion preference is independent of the activity's theme.
+        val isDarkTheme = resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
         WindowCompat.getInsetsController(window, window.decorView)
-            .isAppearanceLightStatusBars = !isNight
+            .isAppearanceLightStatusBars = !isDarkTheme
     }
 
     private fun cleanupWorkingFile(reason: String) {
