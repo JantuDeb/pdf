@@ -456,7 +456,7 @@ open class PdfActivity : AppCompatActivity() {
                 }
                 .scrollHandle(DefaultScrollHandle(this)).swipeHorizontal(false)
                 .enableAntialiasing(true)
-                .spacing(10).pageFitPolicy(FitPolicy.WIDTH).load()
+                .spacing(1).pageFitPolicy(FitPolicy.WIDTH).load()
 
         } catch (e: Exception) {
             e.message?.let { Log.d(TAG, it) }

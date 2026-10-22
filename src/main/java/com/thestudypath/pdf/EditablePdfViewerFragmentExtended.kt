@@ -126,6 +126,9 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     override fun onPdfViewCreated(pdfView: PdfView) {
         super.onPdfViewCreated(pdfView)
         viewer = pdfView
+        val pageSpacing = resources.getDimensionPixelSize(R.dimen.pdf_page_separator)
+        pdfView.verticalPageSpacing = pageSpacing
+        pdfView.horizontalPageSpacing = pageSpacing
         if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
             val defaultRequestFailedListener = pdfView.requestFailedListener
             pdfView.requestFailedListener = object : PdfView.EventListener {
