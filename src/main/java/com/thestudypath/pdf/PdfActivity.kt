@@ -1120,7 +1120,7 @@ open class PdfActivity : AppCompatActivity() {
     // =====================================================================
 
     @SuppressLint("NewApi")
-    private fun downloadPdf() {
+    protected fun downloadPdf() {
         val sourceFile = getOriginalFile()
         if (!sourceFile.exists()) return
 
