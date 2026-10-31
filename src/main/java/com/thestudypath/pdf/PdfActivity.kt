@@ -106,6 +106,7 @@ open class PdfActivity : AppCompatActivity() {
     private lateinit var buttonSearch: ImageButton
     private lateinit var buttonFullscreen: ImageButton
     private lateinit var buttonPopup: ImageButton
+    private lateinit var buttonDownload: ImageButton
     private lateinit var textViewTitle: TextView
 
     private lateinit var flPdfViewFragment: FrameLayout
@@ -295,6 +296,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonSearch = findViewById(R.id.btn_search)
         buttonFullscreen = findViewById(R.id.btn_menu_full)
         buttonPopup = findViewById(R.id.btn_popup)
+        buttonDownload = findViewById(R.id.btn_download)
 
         textViewTitle.text = pdfConfig.displayName ?: pdfConfig.fileName
 
@@ -308,6 +310,12 @@ open class PdfActivity : AppCompatActivity() {
             }
         }
         buttonPopup.setOnClickListener { showPopupMenu(it) }
+        buttonDownload.visibility = if (pdfConfig.showDownloadOption) View.VISIBLE else View.GONE
+        buttonDownload.setOnClickListener {
+            if (callbacks?.onMenuAction(PdfMenuAction.DOWNLOAD) != true) {
+                handleDefaultMenuAction(PdfMenuAction.DOWNLOAD)
+            }
+        }
 
         buttonSave.visibility = View.GONE
         buttonSave.setOnClickListener { performSaveAnnotations() }
@@ -613,6 +621,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonBack.visibility = View.GONE
         themeToggleContainer.visibility = View.GONE
         buttonSearch.visibility = View.GONE
+        buttonDownload.visibility = View.GONE
         pdfViewerFragment?.isTextSearchActive = false
         callbacks?.onEditModeChanged(true)
         annotationWalkthrough?.dismiss(markFinished = false)
@@ -629,6 +638,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonBack.visibility = View.VISIBLE
         if (pdfConfig.showNightModeToggle) themeToggleContainer.visibility = View.VISIBLE
         if (pdfConfig.showSearchButton) buttonSearch.visibility = View.VISIBLE
+        if (pdfConfig.showDownloadOption) buttonDownload.visibility = View.VISIBLE
         callbacks?.onEditModeChanged(false)
     }
 
