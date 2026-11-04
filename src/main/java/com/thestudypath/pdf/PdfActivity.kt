@@ -106,6 +106,7 @@ open class PdfActivity : AppCompatActivity() {
     private lateinit var buttonSearch: ImageButton
     private lateinit var buttonFullscreen: ImageButton
     private lateinit var buttonPopup: ImageButton
+    private lateinit var buttonDownload: ImageButton
     private lateinit var textViewTitle: TextView
 
     private lateinit var flPdfViewFragment: FrameLayout
@@ -119,9 +120,11 @@ open class PdfActivity : AppCompatActivity() {
     private var workingFileCleanupDone: Boolean = false
     private var annotationWalkthrough: PdfAnnotationWalkthrough? = null
     private var adLoadRequested = false
+    private var introWalkthroughScheduled = false
     private var hasFallenBackToLegacyViewer = false
 
     private lateinit var legacyPdfView: PDFView
+    private lateinit var loadingIndicator: View
 
     // =====================================================================
     //  LIFECYCLE
@@ -169,7 +172,7 @@ open class PdfActivity : AppCompatActivity() {
             prepareAndOpenPdf()
         }
 
-        // 8. Ads — wait until annotation walkthroughs are complete before requesting ads.
+        // 8. Ads — loaded straight away, kept hidden while a walkthrough is on screen.
         maybeLoadAdView()
 
         // 9. Notify host
@@ -275,6 +278,7 @@ open class PdfActivity : AppCompatActivity() {
     private fun bindViews() {
 
         legacyPdfView = findViewById(R.id.legacy_pdf_view)
+        loadingIndicator = findViewById(R.id.pdf_loading_indicator)
         flPdfViewFragment = findViewById(R.id.fragment_pdf_container)
 
         if (isPdfEditingSupported()) {
@@ -295,6 +299,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonSearch = findViewById(R.id.btn_search)
         buttonFullscreen = findViewById(R.id.btn_menu_full)
         buttonPopup = findViewById(R.id.btn_popup)
+        buttonDownload = findViewById(R.id.btn_download)
 
         textViewTitle.text = pdfConfig.displayName ?: pdfConfig.fileName
 
@@ -308,6 +313,12 @@ open class PdfActivity : AppCompatActivity() {
             }
         }
         buttonPopup.setOnClickListener { showPopupMenu(it) }
+        buttonDownload.visibility = if (pdfConfig.showDownloadOption) View.VISIBLE else View.GONE
+        buttonDownload.setOnClickListener {
+            if (callbacks?.onMenuAction(PdfMenuAction.DOWNLOAD) != true) {
+                handleDefaultMenuAction(PdfMenuAction.DOWNLOAD)
+            }
+        }
 
         buttonSave.visibility = View.GONE
         buttonSave.setOnClickListener { performSaveAnnotations() }
@@ -338,16 +349,19 @@ open class PdfActivity : AppCompatActivity() {
     private fun prepareAndOpenPdf() {
         lifecycleScope.launch {
             while (true) {
+                setPdfLoading(true)
                 val prepareResult = withContext(Dispatchers.IO) { preparePdfSource() }
                 val preparationError = prepareResult.exceptionOrNull()
                 if (preparationError != null) {
                     if (preparationError is PdfPasswordRequiredException) {
+                        setPdfLoading(false)
                         if (requestUpdatedPassword(preparationError)) {
                             continue
                         }
                         return@launch
                     }
 
+                    setPdfLoading(false)
                     callbacks?.onPdfOpenFailed(
                         preparationError,
                         PdfViewerType.SOURCE_PREPARATION
@@ -381,6 +395,7 @@ open class PdfActivity : AppCompatActivity() {
                 }
                 val error = uriResult.exceptionOrNull()
                 if (error is PdfPasswordRequiredException) {
+                    setPdfLoading(false)
                     if (requestUpdatedPassword(error)) {
                         continue
                     }
@@ -428,11 +443,13 @@ open class PdfActivity : AppCompatActivity() {
         hasFallenBackToLegacyViewer = true
         val sourceFile = getOriginalFile()
         if (!sourceFile.exists()) {
+            setPdfLoading(false)
             Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
             return
         }
 
         Log.d(TAG, "openPdfLegacy: ${sourceFile.path} ")
+        setPdfLoading(true)
 
 //        val file = getFileStreamPath(sourceFile)
         try {
@@ -450,8 +467,10 @@ open class PdfActivity : AppCompatActivity() {
                     callbacks?.onPageChanged(currentPage)
                 }
                 .enableAnnotationRendering(true)
+                .onLoad { setPdfLoading(false) }
                 .onRender { legacyPdfView.fitToWidth(currentPage) }
                 .onError { error ->
+                    setPdfLoading(false)
                     Log.e(TAG, "Legacy PDF viewer failed", error)
                     callbacks?.onPdfOpenFailed(error, PdfViewerType.LEGACY)
                 }
@@ -460,9 +479,14 @@ open class PdfActivity : AppCompatActivity() {
                 .spacing(1).pageFitPolicy(FitPolicy.WIDTH).load()
 
         } catch (e: Exception) {
+            setPdfLoading(false)
             e.message?.let { Log.d(TAG, it) }
             e.printStackTrace()
         }
+    }
+
+    private fun setPdfLoading(loading: Boolean) {
+        if (::loadingIndicator.isInitialized) loadingIndicator.isVisible = loading
     }
 
     @SuppressLint("NewApi")
@@ -532,6 +556,9 @@ open class PdfActivity : AppCompatActivity() {
 
             applyNightMode(isNight)
             pdfViewerFragment?.documentUri = uri
+            // The androidx viewer shows its own progress indicator from here on.
+            setPdfLoading(false)
+            introWalkthroughScheduled = true
             flPdfViewFragment.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
         } catch (error: Throwable) {
             fallbackToLegacyViewer(error)
@@ -613,6 +640,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonBack.visibility = View.GONE
         themeToggleContainer.visibility = View.GONE
         buttonSearch.visibility = View.GONE
+        buttonDownload.visibility = View.GONE
         pdfViewerFragment?.isTextSearchActive = false
         callbacks?.onEditModeChanged(true)
         annotationWalkthrough?.dismiss(markFinished = false)
@@ -629,7 +657,9 @@ open class PdfActivity : AppCompatActivity() {
         buttonBack.visibility = View.VISIBLE
         if (pdfConfig.showNightModeToggle) themeToggleContainer.visibility = View.VISIBLE
         if (pdfConfig.showSearchButton) buttonSearch.visibility = View.VISIBLE
+        if (pdfConfig.showDownloadOption) buttonDownload.visibility = View.VISIBLE
         callbacks?.onEditModeChanged(false)
+        maybeLoadAdView()
     }
 
     // =====================================================================
@@ -637,9 +667,8 @@ open class PdfActivity : AppCompatActivity() {
     // =====================================================================
 
     private fun maybeShowAnnotationIntroWalkthrough() {
-        if (!shouldShowAnnotationWalkthrough(KEY_ANNOTATION_INTRO_SEEN)) return
-        if (isInEditMode) return
-        if (!isAndroidxPdfViewerVisible()) {
+        introWalkthroughScheduled = false
+        if (isInEditMode || !shouldShowAnnotationWalkthrough(KEY_ANNOTATION_INTRO_SEEN)) {
             maybeLoadAdView()
             return
         }
@@ -647,6 +676,7 @@ open class PdfActivity : AppCompatActivity() {
         annotationWalkthrough?.dismiss(markFinished = false)
         val walkthrough = PdfAnnotationWalkthrough(this)
         annotationWalkthrough = walkthrough
+        hideAdDuringWalkthrough()
         walkthrough.start(
             steps = listOf(
                 SpotlightStep(
@@ -665,10 +695,6 @@ open class PdfActivity : AppCompatActivity() {
 
     private fun maybeShowEditModeWalkthrough() {
         if (!isInEditMode) return
-        if (!isAndroidxPdfViewerVisible()) {
-            maybeLoadAdView()
-            return
-        }
         if (!shouldShowAnnotationWalkthrough(KEY_ANNOTATION_EDIT_SEEN)) {
             maybeLoadAdView()
             return
@@ -677,6 +703,7 @@ open class PdfActivity : AppCompatActivity() {
         annotationWalkthrough?.dismiss(markFinished = false)
         val walkthrough = PdfAnnotationWalkthrough(this)
         annotationWalkthrough = walkthrough
+        hideAdDuringWalkthrough()
         walkthrough.start(
             steps = listOf(
                 SpotlightStep(
@@ -704,9 +731,20 @@ open class PdfActivity : AppCompatActivity() {
         )
     }
 
+    private fun isWalkthroughActive(): Boolean =
+        annotationWalkthrough != null || introWalkthroughScheduled
+
+    /** INVISIBLE rather than GONE so the layout (and the spotlight targets) do not shift. */
+    private fun hideAdDuringWalkthrough() {
+        if (adLoadRequested) adContainer.visibility = View.INVISIBLE
+    }
+
     private fun maybeLoadAdView() {
-        if (adLoadRequested) return
-        if (hasPendingAnnotationWalkthrough()) return
+        if (isWalkthroughActive()) return
+        if (adLoadRequested) {
+            adContainer.visibility = View.VISIBLE
+            return
+        }
 
         callbacks?.getAdView()?.let { adView ->
             adLoadRequested = true
@@ -714,15 +752,6 @@ open class PdfActivity : AppCompatActivity() {
             adContainer.addView(adView)
             adContainer.visibility = View.VISIBLE
         }
-    }
-
-    private fun hasPendingAnnotationWalkthrough(): Boolean {
-        if (!isPdfEditingSupported()) return false
-        if (!isAndroidxPdfViewerVisible()) return false
-        if (!pdfConfig.showEditButtons) return false
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        return !prefs.getBoolean(KEY_ANNOTATION_INTRO_SEEN, false) ||
-                !prefs.getBoolean(KEY_ANNOTATION_EDIT_SEEN, false)
     }
 
     private fun shouldShowAnnotationWalkthrough(key: String): Boolean {

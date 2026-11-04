@@ -53,7 +53,7 @@
             android:layout_height="wrap_content"
             app:barrierAllowsGoneWidgets="false"
             app:barrierDirection="start"
-            app:constraint_referenced_ids="btn_save_exit,material_switch,btn_search,btn_menu_full,btn_popup" />
+            app:constraint_referenced_ids="btn_save_exit,material_switch,btn_search,btn_menu_full,btn_download,btn_popup" />
 
         <TextView
             android:id="@+id/text_title"
@@ -113,6 +113,18 @@
             android:src="@drawable/ic_fullscreeen_menu"
             app:tint="?attr/colorPrimary"
             app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/btn_download"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <ImageButton
+            android:id="@+id/btn_download"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Download PDF"
+            android:src="@drawable/ic_toolbar_download"
+            app:tint="?attr/colorPrimary"
+            app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@id/btn_popup"
             app:layout_constraintTop_toTopOf="parent" />
 
@@ -151,6 +163,34 @@
         app:layout_constraintTop_toBottomOf="@id/pdf_top_header"
         android:visibility="gone"
         />
+
+    <!-- Shown while the PDF is being prepared (decryption can take a while for large files). -->
+    <LinearLayout
+        android:id="@+id/pdf_loading_indicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:elevation="4dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/fl_adplaceholder"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/pdf_top_header">
+
+        <com.google.android.material.progressindicator.CircularProgressIndicator
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:indeterminate="true" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/pdf_loading_text"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textColor="?android:attr/textColorSecondary" />
+    </LinearLayout>
 
     <FrameLayout
         android:id="@+id/fl_adplaceholder"
