@@ -1,7 +1,14 @@
+// Applied by id, not by catalog alias: the hosts name their plugin aliases differently. Each host
+// puts both plugins on the build classpath in its root build file (`apply false`).
 plugins {
-    alias libs.plugins.android.library
-    alias libs.plugins.jetbrains.kotlin.parcelize
+    id 'com.android.library'
+    id 'org.jetbrains.kotlin.plugin.compose'
 }
+
+// The View-based PdfActivity draws its toolbar with resources from the old app's :core module.
+// A host without :core (studypath-mobile) builds the Compose reader, PdfActivityCompose, alone.
+def hasCore = findProject(':core') != null
+def catalog = extensions.getByType(VersionCatalogsExtension).named('libs')
 
 android {
     namespace 'com.thestudypath.pdf'
@@ -13,10 +20,20 @@ android {
         consumerProguardFiles "consumer-rules.pro"
     }
 
+    sourceSets {
+        main {
+            if (hasCore) {
+                java.srcDirs += 'src/views/java'
+                kotlin.srcDirs += 'src/views/java'
+                res.srcDirs += 'src/views/res'
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
         }
     }
     compileOptions {
@@ -26,6 +43,7 @@ android {
     }
     buildFeatures {
         buildConfig true
+        compose true
     }
     lint {
         targetSdk 37
@@ -33,12 +51,9 @@ android {
 }
 
 dependencies {
-    implementation project(':core')
-
     implementation libs.appcompat
     implementation libs.material
-    implementation libs.constraintlayout
-    
+
     // PDF Library
     implementation libs.pdf.viewer.fragment
     implementation libs.pdf.ink
@@ -55,21 +70,30 @@ dependencies {
     //Legacy Pdf library
     implementation libs.androidpdfviewer
 
+    // Compose: the reader's bars, sheets and messages (PdfActivityCompose)
+    implementation libs.compose.ui
+    implementation libs.compose.foundation
+    implementation libs.compose.material3
+    implementation libs.androidx.activity.compose
 
     // Coroutines
     implementation libs.kotlinx.coroutines.core
-    implementation libs.kotlinx.coroutines.android
 
     // Lifecycle
-    implementation libs.lifecycle.viewmodel.ktx
-    implementation libs.lifecycle.livedata.ktx
     implementation libs.lifecycle.runtime.ktx
 
-    // Ads
-    
-    // Firebase
-    implementation platform(libs.firebase.bom)
-    implementation libs.firebase.analytics
+    if (hasCore) {
+        // What only PdfActivity (src/views) needs.
+        implementation project(':core')
+        implementation libs.constraintlayout
+        implementation libs.kotlinx.coroutines.android
+        implementation libs.lifecycle.viewmodel.ktx
+        implementation libs.lifecycle.livedata.ktx
+
+        // Firebase
+        catalog.findLibrary('firebase-bom').ifPresent { implementation platform(it) }
+        catalog.findLibrary('firebase-analytics').ifPresent { implementation it }
+    }
 
     coreLibraryDesugaring libs.desugar.jdk.libs
 }

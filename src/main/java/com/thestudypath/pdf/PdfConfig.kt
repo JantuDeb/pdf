@@ -1,9 +1,10 @@
 package com.thestudypath.pdf
 
 import android.content.Intent
+import com.thestudypath.pdf.interfaces.PdfReaderTool
 
 /**
- * Configuration for GenericPdfActivity.
+ * Configuration for [PdfActivity] and [PdfActivityCompose].
  * Each host app builds this from its own intent extras, shared prefs, etc.
  */
 data class PdfConfig(
@@ -18,6 +19,20 @@ data class PdfConfig(
     val showDownloadOption: Boolean = true,
     val showOrientationOption: Boolean = true,
     val showFullscreenButton: Boolean = true,
+
+    // ── PdfActivityCompose only ───────────────────────────────────────────
+    /** A second, quieter line under the title: "Triangles · NCERT Solutions". */
+    val subtitle: String? = null,
+    /** The bookmark in the top bar. The host keeps what is bookmarked: see [PdfReaderTool.BOOKMARK]. */
+    val showBookmarkButton: Boolean = false,
+    val isBookmarked: Boolean = false,
+    /** The "6 / 10" badge over the bottom of the page. */
+    val showPageIndicator: Boolean = true,
+    /**
+     * The tools along the bottom, in this order. Empty (the default) draws no bottom bar, and
+     * night mode stays in the top bar. With [PdfReaderTool.NIGHT] here, it leaves the top bar.
+     */
+    val tools: List<PdfReaderTool> = emptyList(),
 ) {
     companion object {
         /**

@@ -1,4 +1,60 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="pdf_loading_text">Opening PDF…</string>
+
+    <!-- PdfActivityCompose. Worded as the StudyPath design words the reader (screen 15). -->
+    <string name="pdf_tool_pages">Pages</string>
+    <string name="pdf_tool_night">Night</string>
+    <string name="pdf_tool_ask">Ask</string>
+    <string name="pdf_tool_save">Save</string>
+    <string name="pdf_tool_next">Next</string>
+    <!-- The page badge: the page on screen, then how many there are. -->
+    <string name="pdf_page_indicator">%1$d / %2$d</string>
+    <string name="pdf_page_of">Page %1$d of %2$d</string>
+    <string name="pdf_page_number">Page %1$d</string>
+    <string name="pdf_pages_title">Pages</string>
+    <!-- Shown on reopening a file at the page it was left on. -->
+    <string name="pdf_resumed_page">Back where you stopped: page %1$d</string>
+
+    <string name="pdf_action_back">Back</string>
+    <string name="pdf_action_close">Close</string>
+    <string name="pdf_action_exit_edit">Exit edit mode</string>
+    <string name="pdf_action_save_annotations">Save annotations</string>
+    <string name="pdf_action_search">Search in PDF</string>
+    <string name="pdf_action_fullscreen">Fullscreen</string>
+    <string name="pdf_action_download">Download PDF</string>
+    <string name="pdf_action_bookmark">Bookmark</string>
+    <string name="pdf_action_more">More options</string>
+    <string name="pdf_action_retry">Try again</string>
+    <string name="pdf_menu_orientation">Change Orientation</string>
+
+    <string name="pdf_error_title">That didn\'t load</string>
+    <string name="pdf_error_open">Failed to open PDF</string>
+    <string name="pdf_error_not_found">File not found</string>
+    <string name="pdf_annotation_unsupported">PDF annotation not supported on this device</string>
+
+    <string name="pdf_unsaved_title">Unsaved changes</string>
+    <string name="pdf_unsaved_message">You have unsaved annotations. Do you want to save them before closing edit mode?</string>
+    <string name="pdf_unsaved_save">Save</string>
+    <string name="pdf_unsaved_discard">Discard</string>
+    <string name="pdf_save_unsupported">Not supported on this device</string>
+    <string name="pdf_save_not_configured">Save not configured</string>
+    <string name="pdf_save_no_document">No document loaded</string>
+    <string name="pdf_save_done">Annotations saved</string>
+    <string name="pdf_save_failed">Save failed: %1$s</string>
+    <string name="pdf_save_annotation_failed">Annotation save failed</string>
+
+    <string name="pdf_download_unavailable">Download not available</string>
+    <string name="pdf_download_started">PDF is being downloaded…</string>
+    <string name="pdf_download_done">PDF download completed</string>
+    <string name="pdf_download_failed">PDF download failed</string>
+
+    <string name="pdf_walkthrough_intro_title">Annotate PDFs</string>
+    <string name="pdf_walkthrough_intro_message">Tap the pen button to draw, highlight, and mark important steps.</string>
+    <string name="pdf_walkthrough_tool_title">Choose a tool</string>
+    <string name="pdf_walkthrough_tool_message">Tap pen or highlighter. Tap the selected pen again to change thickness, and use color to switch ink.</string>
+    <string name="pdf_walkthrough_save_title">Save annotations</string>
+    <string name="pdf_walkthrough_save_message">Tap save when you want to keep your notes in this PDF.</string>
+    <string name="pdf_walkthrough_exit_title">Exit edit mode</string>
+    <string name="pdf_walkthrough_exit_message">Close editing when you are done. If changes are unsaved, we will ask before closing.</string>
 </resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="pdf_theme_brand">#2F4FD6</color>
+    <color name="pdf_theme_on_brand">#FFFFFF</color>
+    <color name="pdf_theme_brand_soft">#18244A</color>
+    <color name="pdf_theme_brand_text">#93A5FF</color>
+    <color name="pdf_theme_surface">#0C111D</color>
+    <color name="pdf_theme_surface_raised">#151B2B</color>
+    <color name="pdf_theme_surface_sunken">#1F2638</color>
+    <color name="pdf_theme_ink">#F3F5FA</color>
+    <color name="pdf_theme_ink_muted">#A5AABB</color>
+    <color name="pdf_theme_line">#2C3448</color>
+</resources>

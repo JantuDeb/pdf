@@ -2,4 +2,16 @@
 <resources>
     <!-- Keep this independent of the app theme. The PDF night filter darkens it. -->
     <color name="pdf_viewport_background">#E0E0E0</color>
+
+    <!-- Theme.StudyPathPdf: the Breeze roles the AndroidX viewer's own controls pick up. -->
+    <color name="pdf_theme_brand">#122DA4</color>
+    <color name="pdf_theme_on_brand">#FFFFFF</color>
+    <color name="pdf_theme_brand_soft">#E8ECFB</color>
+    <color name="pdf_theme_brand_text">#122DA4</color>
+    <color name="pdf_theme_surface">#F8F9FC</color>
+    <color name="pdf_theme_surface_raised">#FFFFFF</color>
+    <color name="pdf_theme_surface_sunken">#EEF1F7</color>
+    <color name="pdf_theme_ink">#0B0D14</color>
+    <color name="pdf_theme_ink_muted">#5F6170</color>
+    <color name="pdf_theme_line">#E3E7EB</color>
 </resources>

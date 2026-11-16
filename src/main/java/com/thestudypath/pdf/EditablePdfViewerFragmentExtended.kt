@@ -53,6 +53,9 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     var initialPage: Int = 0
     var onPageChanged: ((Int) -> Unit)? = null
 
+    /** Called with the page count once the document has loaded. */
+    var onDocumentLoaded: ((Int) -> Unit)? = null
+
     // Callbacks for the activity
     var onSaveComplete: (() -> Unit)? = null
     var onSaveError: ((Throwable) -> Unit)? = null
@@ -98,6 +101,7 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
             }
         }
         Log.d(TAG, "Document loaded: ${document.pageCount} pages")
+        onDocumentLoaded?.invoke(document.pageCount)
     }
 
     override fun onLoadDocumentError(error: Throwable) {
@@ -403,6 +407,13 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         onSaveError?.invoke(error)
     }
 
+    /** Scrolls to [page], counted from 0. Does nothing until the document has loaded. */
+    fun scrollToPage(page: Int) {
+        if (!_isDocumentLoaded) return
+        pendingInitialPage = null
+        viewer?.scrollToPage(page)
+    }
+
     fun exitEditMode() {
         if (isEditModeEnabled) {
             isEditModeEnabled = false
@@ -419,6 +430,7 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         pendingOutputFile = null
         pendingInitialPage = null
         lastReportedPage = null
+        onDocumentLoaded = null
         onDocumentLoadError = null
         onDocumentRequestFailed = null
         hasReportedRequestFailure = false

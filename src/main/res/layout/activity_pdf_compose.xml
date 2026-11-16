@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    PdfActivityCompose. The PDF viewer stays in ordinary views (ink drawing redraws properly
+    there); the bars, the messages over the page and the sheets are Compose.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:ignore="MergeRootFrame">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <androidx.compose.ui.platform.ComposeView
+            android:id="@+id/pdf_reader_top_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <FrameLayout
+                android:id="@+id/pdf_reader_fragment_container"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <com.github.barteksc.pdfviewer.PDFView
+                android:id="@+id/pdf_reader_legacy_view"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@color/pdf_viewport_background"
+                android:visibility="gone" />
+
+            <!-- The spinner, the error message, the page badge and the snackbar. -->
+            <androidx.compose.ui.platform.ComposeView
+                android:id="@+id/pdf_reader_page_overlay"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/pdf_reader_ad_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <androidx.compose.ui.platform.ComposeView
+            android:id="@+id/pdf_reader_bottom_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <!-- Sheets and dialogs, over everything. Empty, it lets touches through. -->
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/pdf_reader_modal_layer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+</FrameLayout>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        A ready theme for a host's PdfActivityCompose subclass. The AndroidX viewer inflates
+        Material widgets (the edit button, the annotation toolbar, its search bar), so the
+        activity needs a Material 3 theme; this one gives them StudyPath's colours, light and dark.
+        The reader's own bars are drawn by PdfTheme, not by this.
+    -->
+    <style name="Theme.StudyPathPdf" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/pdf_theme_brand</item>
+        <item name="colorOnPrimary">@color/pdf_theme_on_brand</item>
+        <item name="colorPrimaryContainer">@color/pdf_theme_brand_soft</item>
+        <item name="colorOnPrimaryContainer">@color/pdf_theme_brand_text</item>
+        <item name="colorSecondaryContainer">@color/pdf_theme_brand_soft</item>
+        <item name="colorOnSecondaryContainer">@color/pdf_theme_brand_text</item>
+        <item name="colorSurface">@color/pdf_theme_surface_raised</item>
+        <item name="colorOnSurface">@color/pdf_theme_ink</item>
+        <item name="colorSurfaceVariant">@color/pdf_theme_surface_sunken</item>
+        <item name="colorOnSurfaceVariant">@color/pdf_theme_ink_muted</item>
+        <item name="colorSurfaceContainer">@color/pdf_theme_surface_raised</item>
+        <item name="colorSurfaceContainerHigh">@color/pdf_theme_surface_raised</item>
+        <item name="colorSurfaceContainerHighest">@color/pdf_theme_surface_sunken</item>
+        <item name="colorOutline">@color/pdf_theme_line</item>
+        <item name="android:colorBackground">@color/pdf_theme_surface</item>
+        <item name="android:windowBackground">@color/pdf_theme_surface_sunken</item>
+    </style>
+</resources>

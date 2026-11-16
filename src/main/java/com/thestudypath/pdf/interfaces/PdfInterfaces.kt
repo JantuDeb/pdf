@@ -30,6 +30,12 @@ interface PdfActivityCallbacks {
     /** Called once after the PDF is opened. Good place for analytics. */
     fun onPdfOpened(config: PdfConfig) {}
 
+    /**
+     * Called once the document is on screen and its page count is known, whichever viewer
+     * opened it. PdfActivityCompose only.
+     */
+    fun onDocumentLoaded(pageCount: Int) {}
+
     /** Called every time the visible page changes. Good place to persist last-read page. */
     fun onPageChanged(page: Int) {}
 
@@ -81,6 +87,16 @@ interface PdfActivityCallbacks {
      */
     fun onRawMenuItemAction(itemId: Int, title: CharSequence?): Boolean = false
 
+    /**
+     * Called when a tool of the Compose reader is tapped: one of [PdfConfig.tools], or the
+     * bookmark in the top bar. [page] is the page on screen, counted from 0.
+     *
+     * Return true if you handled it. The reader's own tools ([PdfReaderTool.PAGES],
+     * [PdfReaderTool.NIGHT]) run when this returns false; the rest are the host's alone.
+     * PdfActivityCompose only.
+     */
+    fun onReaderTool(tool: PdfReaderTool, page: Int): Boolean = false
+
     /** Called when back is pressed normally (not in edit mode or fullscreen). */
     fun onNavigateBack() {}
 
@@ -107,6 +123,30 @@ interface PagePersistence {
 enum class PdfMenuAction {
     DOWNLOAD,
     CHANGE_ORIENTATION
+}
+
+/**
+ * What the Compose reader can offer beside the page. The reader draws them; what ASK, SAVE,
+ * NEXT and BOOKMARK do is the host's ([PdfActivityCallbacks.onReaderTool]).
+ */
+enum class PdfReaderTool {
+    /** The list of pages: tap one to go there. The reader's own. */
+    PAGES,
+
+    /** Night mode for the page. The reader's own, remembered between files. */
+    NIGHT,
+
+    /** Ask about this page. */
+    ASK,
+
+    /** Save or share the file. */
+    SAVE,
+
+    /** The next file in the chapter. */
+    NEXT,
+
+    /** The bookmark in the top bar ([PdfConfig.showBookmarkButton]); not a bottom tool. */
+    BOOKMARK,
 }
 
 enum class PdfViewerRecovery {
