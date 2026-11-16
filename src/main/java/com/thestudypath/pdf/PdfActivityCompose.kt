@@ -683,6 +683,7 @@ open class PdfActivityCompose : AppCompatActivity() {
 
             if (pdfViewerFragment == null) {
                 val fragment = EditablePdfViewerFragmentExtended()
+                fragment.showEditButton = pdfConfig.showEditButtons
                 pdfViewerFragment = fragment
 
                 fm
@@ -693,6 +694,7 @@ open class PdfActivityCompose : AppCompatActivity() {
                 setupFragmentCallbacks(fragment)
             } else {
                 (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.let {
+                    it.showEditButton = pdfConfig.showEditButtons
                     setupFragmentCallbacks(it)
                 }
             }

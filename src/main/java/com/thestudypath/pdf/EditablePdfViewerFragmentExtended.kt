@@ -51,6 +51,9 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     private var hasReportedRequestFailure = false
 
     var initialPage: Int = 0
+
+    /** The pen button over the page. False keeps it hidden ([PdfConfig.showEditButtons]). */
+    var showEditButton: Boolean = true
     var onPageChanged: ((Int) -> Unit)? = null
 
     /** Called with the page count once the document has loaded. */
@@ -307,11 +310,12 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
         throw NoSuchMethodException(name)
     }
 
+    /** Keeps the pen button as the host asked: shown, or hidden when [showEditButton] is false. */
     private fun keepEditFabVisible(attemptsRemaining: Int = 0) {
         if (isEditModeEnabled) return
         val root = view ?: return
-        isToolboxVisible = true
-        if (!isToolboxVisible && attemptsRemaining > 0) {
+        isToolboxVisible = showEditButton
+        if (isToolboxVisible != showEditButton && attemptsRemaining > 0) {
             root.postDelayed(
                 { keepEditFabVisible(attemptsRemaining - 1) },
                 EDIT_FAB_VISIBILITY_RETRY_DELAY_MS,
