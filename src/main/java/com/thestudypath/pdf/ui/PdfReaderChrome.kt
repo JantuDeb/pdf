@@ -259,7 +259,8 @@ fun PdfToolBar(
             ToolItem(
                 icon = look.icon,
                 label = stringResource(look.label),
-                on = tool == PdfReaderTool.ASK || (tool == PdfReaderTool.NIGHT && state.isNight),
+                // Tools are actions: only night mode stays on, and shows it.
+                on = tool == PdfReaderTool.NIGHT && state.isNight,
                 selected = if (tool == PdfReaderTool.NIGHT) state.isNight else null,
                 onClick = { actions.tool(tool) },
             )

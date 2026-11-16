@@ -19,12 +19,8 @@ object PdfIcons {
     val Search = icon("Search", "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4")
     val Bookmark = icon("Bookmark", "M7 4h10v16l-5-3.5L7 20z")
     val Pages = icon("Pages", "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h4")
-    val Night = icon("Night", "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5V12l3 2")
-    val Ask =
-        icon(
-            "Ask",
-            "M21 12a8 8 0 0 1-11.8 7L4 20l1.2-4.3A8 8 0 1 1 21 12zM12 8.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1L9 11.5l2.1-.9z",
-        )
+    val Night = icon("Night", "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z")
+    val Ask = icon("Ask", "M7.9 20A9 9 0 1 0 4 16.1L3 21zM9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01")
     val Save = icon("Save", "M12 4v11M7.5 11 12 15.5 16.5 11M5 20h14")
     val Next = icon("Next", "m9 6 6 6-6 6")
 
