@@ -170,16 +170,20 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
                 pageLocations: SparseArray<RectF>,
                 zoomLevel: Float,
             ) {
+                // The page being read is the one taking up most of the view, not the first with
+                // any part showing: a sliver of the page above must not count, or the badge reads
+                // one page short and the remembered page drifts back on every reopen.
+                val page = mostVisiblePage(firstVisiblePage, visiblePagesCount, pageLocations, pdfView.height)
                 if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
                     val pendingPage = pendingInitialPage
-                    if (pendingPage != null && firstVisiblePage != pendingPage) {
+                    if (pendingPage != null && page != pendingPage) {
                         return
                     }
                 }
                 if (ENABLE_ANDROIDX_PDF_INTERNAL_CUSTOMIZATIONS) {
                     keepEditFabVisible()
                 }
-                emitPageChanged(firstVisiblePage)
+                emitPageChanged(page)
             }
         }
         viewportChangedListener?.let { listener ->
@@ -191,6 +195,26 @@ class EditablePdfViewerFragmentExtended : EditablePdfViewerFragment() {
     private fun Throwable.asReportableRequestFailure(): Throwable {
         val requestError = this as? RequestFailedException ?: return this
         return RuntimeException(requestError.toString(), requestError.throwable)
+    }
+
+    /** Of the visible pages, the one with the most of its height inside a view [viewHeight] tall. */
+    private fun mostVisiblePage(
+        firstVisiblePage: Int,
+        visiblePagesCount: Int,
+        pageLocations: SparseArray<RectF>,
+        viewHeight: Int,
+    ): Int {
+        var best = firstVisiblePage
+        var bestShown = -1f
+        for (page in firstVisiblePage until firstVisiblePage + visiblePagesCount.coerceAtLeast(1)) {
+            val rect = pageLocations.get(page) ?: continue
+            val shown = minOf(rect.bottom, viewHeight.toFloat()) - maxOf(rect.top, 0f)
+            if (shown > bestShown) {
+                best = page
+                bestShown = shown
+            }
+        }
+        return best
     }
 
     private fun emitPageChanged(page: Int) {
