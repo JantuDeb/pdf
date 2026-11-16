@@ -8,6 +8,7 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.pdf.LoadParams
 import android.graphics.pdf.PdfRenderer
+import android.graphics.pdf.PdfRendererPreV
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -24,7 +25,7 @@ import java.io.FileInputStream
 // as PdfActivity, kept apart from the activity so they can be read and tested on their own.
 
 /**
- * AndroidX PDF with annotation needs SDK extension 18 of Android 12. Below that: the legacy viewer.
+ * AndroidX PDF with annotation needs SDK extension 18 of Android 12. Below that: the fallback viewer.
  * The Android 12 check is for a host that lowers this module's minSdk with `tools:overrideLibrary`.
  */
 @SuppressLint("ObsoleteSdkInt")
@@ -65,9 +66,11 @@ internal fun canOpenPdfWithoutPassword(sourceFile: File): Boolean =
 /**
  * Writes [sourceFile] to [targetFile] without its password.
  *
- * @throws PdfPasswordRequiredException when the file is locked and [password] is missing.
- * @throws UnsupportedOperationException when the file is locked and this Android version cannot
- *   unlock it (below Android 15).
+ * Unlocking is the platform's work: Android 15 does it itself, Android 12 to 14 through the PDF
+ * system update (SDK extension 13).
+ *
+ * @throws PdfPasswordRequiredException when the file is locked and [password] is missing or wrong.
+ * @throws UnsupportedOperationException when the file is locked and this device cannot unlock it.
  */
 @SuppressLint("NewApi")
 internal fun writeDecryptedPdf(
@@ -82,21 +85,34 @@ internal fun writeDecryptedPdf(
     if (password.isNullOrEmpty()) {
         throw PdfPasswordRequiredException()
     }
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-        throw UnsupportedOperationException("Password-protected PDFs need Android 15 or newer")
+    val platformUnlocks = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
+    val updateUnlocks =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) >= 13
+    if (!platformUnlocks && !updateUnlocks) {
+        throw UnsupportedOperationException("This device cannot open password-protected PDFs")
     }
 
-    ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
-        val loadParams = LoadParams.Builder().setPassword(password).build()
-        PdfRenderer(inputFd, loadParams).use { renderer ->
+    try {
+        ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
+            val loadParams = LoadParams.Builder().setPassword(password).build()
             ParcelFileDescriptor
                 .open(
                     targetFile,
                     ParcelFileDescriptor.MODE_CREATE or
                         ParcelFileDescriptor.MODE_READ_WRITE or
                         ParcelFileDescriptor.MODE_TRUNCATE,
-                ).use { outputFd -> renderer.write(outputFd, true) }
+                ).use { outputFd ->
+                    if (platformUnlocks) {
+                        PdfRenderer(inputFd, loadParams).use { it.write(outputFd, true) }
+                    } else {
+                        PdfRendererPreV(inputFd, loadParams).use { it.write(outputFd, true) }
+                    }
+                }
         }
+    } catch (e: SecurityException) {
+        // What the platform throws for a password that does not open the file.
+        throw PdfPasswordRequiredException(isIncorrectPassword = true)
     }
 }
 

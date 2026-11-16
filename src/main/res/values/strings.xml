@@ -31,7 +31,6 @@
     <string name="pdf_error_title">That didn\'t load</string>
     <string name="pdf_error_open">Failed to open PDF</string>
     <string name="pdf_error_not_found">File not found</string>
-    <string name="pdf_annotation_unsupported">PDF annotation not supported on this device</string>
 
     <string name="pdf_unsaved_title">Unsaved changes</string>
     <string name="pdf_unsaved_message">You have unsaved annotations. Do you want to save them before closing edit mode?</string>

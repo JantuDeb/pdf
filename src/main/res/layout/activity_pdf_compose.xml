@@ -29,11 +29,11 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent" />
 
-            <com.github.barteksc.pdfviewer.PDFView
-                android:id="@+id/pdf_reader_legacy_view"
+            <!-- The built-in viewer, for when AndroidX PDF cannot show the file. -->
+            <androidx.compose.ui.platform.ComposeView
+                android:id="@+id/pdf_reader_built_in_viewer"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:background="@color/pdf_viewport_background"
                 android:visibility="gone" />
 
             <!-- The spinner, the error message, the page badge and the snackbar. -->

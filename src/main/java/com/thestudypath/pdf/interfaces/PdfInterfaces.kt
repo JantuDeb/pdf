@@ -157,5 +157,7 @@ enum class PdfViewerRecovery {
 enum class PdfViewerType {
     SOURCE_PREPARATION,
     ANDROIDX,
+
+    /** The viewer fallen back to: pdfium in PdfActivity, Android's own renderer in PdfActivityCompose. */
     LEGACY,
 }

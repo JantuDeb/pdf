@@ -6,6 +6,7 @@ import android.annotation.SuppressLint
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
@@ -20,10 +21,13 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresExtension
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.content.FileProvider
@@ -34,15 +38,13 @@ import androidx.core.view.size
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.pdf.ink.EditablePdfViewerFragment
-import com.github.barteksc.pdfviewer.PDFView
-import com.github.barteksc.pdfviewer.scroll.DefaultScrollHandle
-import com.github.barteksc.pdfviewer.util.FitPolicy
 import com.thestudypath.pdf.interfaces.PdfActivityCallbacks
 import com.thestudypath.pdf.interfaces.PdfAnnotationSaver
 import com.thestudypath.pdf.interfaces.PdfMenuAction
 import com.thestudypath.pdf.interfaces.PdfReaderTool
 import com.thestudypath.pdf.interfaces.PdfViewerRecovery
 import com.thestudypath.pdf.interfaces.PdfViewerType
+import com.thestudypath.pdf.ui.PdfBuiltInPages
 import com.thestudypath.pdf.ui.PdfMenuEntry
 import com.thestudypath.pdf.ui.PdfNavigationBarSpacer
 import com.thestudypath.pdf.ui.PdfPageOverlay
@@ -60,6 +62,7 @@ import com.thestudypath.pdf.ui.PdfUnsavedChangesDialog
 import com.thestudypath.pdf.walkthrough.PdfAnnotationWalkthrough
 import com.thestudypath.pdf.walkthrough.SpotlightCardPlacement
 import com.thestudypath.pdf.walkthrough.SpotlightStep
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -67,13 +70,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 
 /**
  * The PDF reader with its bars, messages and sheets drawn in Compose.
  *
  * It does everything [PdfActivity] does, the same way: password-protected files, the AndroidX
- * viewer with annotation and its fall back to the legacy viewer, the colour-preserving night
+ * viewer with annotation and a viewer to fall back on, the colour-preserving night
  * mode, search, fullscreen, download, the annotation walkthrough, the ad slot and the remembered
  * page. The PDF itself stays in ordinary views (ink drawing redraws properly there); only what is
  * around it is Compose.
@@ -107,7 +111,7 @@ open class PdfActivityCompose : AppCompatActivity() {
     private lateinit var bottomBarView: ComposeView
     private lateinit var modalLayerView: ComposeView
     private lateinit var fragmentContainer: FrameLayout
-    private lateinit var legacyPdfView: PDFView
+    private lateinit var builtInViewerView: ComposeView
     private lateinit var adContainer: FrameLayout
 
     // ── What Compose draws from ───────────────────────────────────────────
@@ -130,8 +134,14 @@ open class PdfActivityCompose : AppCompatActivity() {
     private var annotationWalkthrough: PdfAnnotationWalkthrough? = null
     private var adLoadRequested = false
     private var introWalkthroughScheduled = false
-    private var hasFallenBackToLegacyViewer = false
+    private var isBuiltInViewerActive = false
+
+    // The built-in viewer: Android's own renderer, when AndroidX PDF cannot show the file.
+    private var builtInRenderer by mutableStateOf<PdfPageRenderer?>(null)
+    private var builtInListState by mutableStateOf(LazyListState())
+    private var nightPaint by mutableStateOf<Paint?>(null)
     private var openJob: Job? = null
+    private var builtInJob: Job? = null
     private var snackbarJob: Job? = null
 
     private val actions =
@@ -216,6 +226,8 @@ open class PdfActivityCompose : AppCompatActivity() {
         pendingPdfUri = null
         annotationWalkthrough?.dismiss(markFinished = false)
         annotationWalkthrough = null
+        builtInRenderer?.close()
+        builtInRenderer = null
         cleanupWorkingFile("onDestroy")
         super.onDestroy()
     }
@@ -362,15 +374,16 @@ open class PdfActivityCompose : AppCompatActivity() {
         bottomBarView = findViewById(R.id.pdf_reader_bottom_bar)
         modalLayerView = findViewById(R.id.pdf_reader_modal_layer)
         fragmentContainer = findViewById(R.id.pdf_reader_fragment_container)
-        legacyPdfView = findViewById(R.id.pdf_reader_legacy_view)
+        builtInViewerView = findViewById(R.id.pdf_reader_built_in_viewer)
         adContainer = findViewById(R.id.pdf_reader_ad_container)
 
-        if (isAndroidxPdfSupported()) {
-            legacyPdfView.visibility = View.GONE
-        } else {
-            fragmentContainer.visibility = View.GONE
-            legacyPdfView.visibility = View.VISIBLE
-        }
+        if (!isAndroidxPdfSupported()) showBuiltInViewer()
+    }
+
+    private fun showBuiltInViewer() {
+        isBuiltInViewerActive = true
+        fragmentContainer.visibility = View.GONE
+        builtInViewerView.visibility = View.VISIBLE
     }
 
     private fun setComposeContent() {
@@ -380,6 +393,14 @@ open class PdfActivityCompose : AppCompatActivity() {
                     if (!state.isFullScreen) TopBar(state, actions)
                 }
             }
+        }
+        builtInViewerView.setContent {
+            val renderer = builtInRenderer ?: return@setContent
+            val listState = builtInListState
+            LaunchedEffect(listState) {
+                snapshotFlow { listState.firstVisibleItemIndex }.collect { onPageShown(it) }
+            }
+            PdfBuiltInPages(renderer.aspectRatios, listState, nightPaint, renderer::render)
         }
         pageOverlayView.setContent {
             ReaderTheme { PdfPageOverlay(state, actions, snackbarMessage) }
@@ -434,7 +455,7 @@ open class PdfActivityCompose : AppCompatActivity() {
         copy(
             showSaveAnnotations = pdfConfig.showEditButtons,
             showNightToggle = pdfConfig.showNightModeToggle && PdfReaderTool.NIGHT !in pdfConfig.tools,
-            showSearch = pdfConfig.showSearchButton && isAndroidxPdfSupported() && !hasFallenBackToLegacyViewer,
+            showSearch = pdfConfig.showSearchButton && isAndroidxPdfSupported() && !isBuiltInViewerActive,
             showFullscreen = pdfConfig.showFullscreenButton,
             showDownload = pdfConfig.showDownloadOption,
             showBookmark = pdfConfig.showBookmarkButton,
@@ -481,23 +502,21 @@ open class PdfActivityCompose : AppCompatActivity() {
                         return@launch
                     }
 
-                    if (!isAndroidxPdfSupported()) {
-                        showMessage(getString(R.string.pdf_annotation_unsupported))
-                        openPdfLegacy()
-                        return@launch
-                    }
-
+                    // The unlocked copy both viewers read.
                     val sourceFile = resolveSourceFile()
-                    val uriResult =
+                    val workingFile = getWorkingFile()
+                    val error =
                         withContext(Dispatchers.IO) {
                             runCatching {
                                 if (!sourceFile.exists()) {
-                                    throw IOException("PDF source file was not found")
+                                    throw FileNotFoundException("PDF source file was not found")
                                 }
-                                prepareDecryptedPdfUri(sourceFile, pdfConfig.password)
-                            }
+                                if (workingFile.exists() && !workingFile.delete()) {
+                                    throw IOException("Unable to replace the previous prepared PDF")
+                                }
+                                writeDecryptedPdfToFile(sourceFile, workingFile, pdfConfig.password)
+                            }.exceptionOrNull()
                         }
-                    val error = uriResult.exceptionOrNull()
                     if (error is PdfPasswordRequiredException) {
                         if (requestUpdatedPassword(error)) {
                             continue
@@ -506,12 +525,27 @@ open class PdfActivityCompose : AppCompatActivity() {
                         return@launch
                     }
                     if (error != null) {
+                        Log.e(TAG, "Could not prepare the PDF", error)
                         callbacks?.onPdfOpenFailed(error, PdfViewerType.SOURCE_PREPARATION)
-                        fallbackToLegacyViewer(error)
+                        showFailure(
+                            getString(
+                                if (error is FileNotFoundException) R.string.pdf_error_not_found else R.string.pdf_error_open,
+                            ),
+                        )
                         return@launch
                     }
 
-                    initializePdfViewerFragmentWhenReady(uriResult.getOrThrow())
+                    if (!isAndroidxPdfSupported()) {
+                        openBuiltInViewer()
+                        return@launch
+                    }
+
+                    val uri = getUriForFile(workingFile)
+                    if (uri == null) {
+                        fallbackToBuiltInViewer(IOException("Unable to create a URI for the prepared PDF"))
+                        return@launch
+                    }
+                    initializePdfViewerFragmentWhenReady(uri)
                     return@launch
                 }
             }
@@ -538,48 +572,39 @@ open class PdfActivityCompose : AppCompatActivity() {
         return true
     }
 
-    private fun openPdfLegacy() {
-        hasFallenBackToLegacyViewer = true
-        val sourceFile = resolveSourceFile()
-        if (!sourceFile.exists()) {
-            showFailure(getString(R.string.pdf_error_not_found))
-            return
-        }
-
-        Log.d(TAG, "openPdfLegacy: ${sourceFile.path} ")
+    /**
+     * Shows the prepared file with Android's own renderer: pages only, scrolled vertically, with
+     * zoom and night mode. No native library, no search, no annotation.
+     */
+    private fun openBuiltInViewer() {
+        showBuiltInViewer()
         setStatus(PdfReaderStatus.Loading)
+        builtInJob?.cancel()
+        builtInJob =
+            lifecycleScope.launch {
+                runCatching { PdfPageRenderer.open(getWorkingFile()) }
+                    .onSuccess { renderer ->
+                        builtInRenderer?.close()
+                        builtInListState = LazyListState(currentPage.coerceIn(0, (renderer.pageCount - 1).coerceAtLeast(0)))
+                        builtInRenderer = renderer
+                        onDocumentLoaded(renderer.pageCount)
+                    }.onFailure { error ->
+                        if (error is CancellationException) throw error
+                        Log.e(TAG, "Built-in PDF viewer failed", error)
+                        callbacks?.onPdfOpenFailed(error, PdfViewerType.LEGACY)
+                        showFailure(getString(R.string.pdf_error_open))
+                    }
+            }
+    }
 
-        try {
-            legacyPdfView
-                .fromFile(sourceFile)
-                .enableSwipe(true)
-                .defaultPage(currentPage)
-                // Use the same color-preserving filter as the modern renderer.
-                .nightMode(false)
-                .swipeHorizontal(false)
-                .enableDoubletap(true)
-                .password(pdfConfig.password)
-                .enableAntialiasing(true)
-                .onPageChange { page, _ ->
-                    currentPage = page
-                    updateState { copy(page = page) }
-                    callbacks?.onPageChanged(currentPage)
-                }.enableAnnotationRendering(true)
-                .onLoad { pageCount -> onDocumentLoaded(pageCount) }
-                .onRender { legacyPdfView.fitToWidth(currentPage) }
-                .onError { error ->
-                    Log.e(TAG, "Legacy PDF viewer failed", error)
-                    callbacks?.onPdfOpenFailed(error, PdfViewerType.LEGACY)
-                    showFailure(getString(R.string.pdf_error_open))
-                }.scrollHandle(DefaultScrollHandle(this))
-                .spacing(1)
-                .pageFitPolicy(FitPolicy.WIDTH)
-                .load()
-        } catch (e: Exception) {
-            Log.e(TAG, "Legacy PDF viewer could not start", e)
-            callbacks?.onPdfOpenFailed(e, PdfViewerType.LEGACY)
-            showFailure(getString(R.string.pdf_error_open))
+    /** The page on screen changed, in either viewer. */
+    private fun onPageShown(page: Int) {
+        if (currentPage != page) {
+            currentPage = page
+            saveCurrentPage()
+            callbacks?.onPageChanged(page)
         }
+        if (state.page != page) updateState { copy(page = page) }
     }
 
     /** Either viewer has the document up: the page count is known and the page can be announced. */
@@ -592,19 +617,6 @@ open class PdfActivityCompose : AppCompatActivity() {
                 showMessage(getString(R.string.pdf_resumed_page, page + 1))
             }
         }
-    }
-
-    private fun prepareDecryptedPdfUri(
-        sourceFile: File,
-        password: String?,
-    ): Uri {
-        val workingFile = getWorkingFile()
-        if (workingFile.exists() && !workingFile.delete()) {
-            throw IOException("Unable to replace the previous prepared PDF")
-        }
-        writeDecryptedPdfToFile(sourceFile, workingFile, password)
-        return getUriForFile(workingFile)
-            ?: throw IOException("Unable to create a URI for the prepared PDF")
     }
 
     /**
@@ -678,7 +690,7 @@ open class PdfActivityCompose : AppCompatActivity() {
             introWalkthroughScheduled = true
             fragmentContainer.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
         } catch (error: Throwable) {
-            fallbackToLegacyViewer(error)
+            fallbackToBuiltInViewer(error)
         }
     }
 
@@ -699,37 +711,27 @@ open class PdfActivityCompose : AppCompatActivity() {
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun setupFragmentCallbacks(fragment: EditablePdfViewerFragmentExtended) {
         fragment.initialPage = currentPage
-        fragment.onPageChanged = { page ->
-            if (currentPage != page) {
-                currentPage = page
-                saveCurrentPage()
-                callbacks?.onPageChanged(page)
-            }
-            if (state.page != page) updateState { copy(page = page) }
-        }
+        fragment.onPageChanged = { page -> onPageShown(page) }
         fragment.onDocumentLoaded = { pageCount -> onDocumentLoaded(pageCount) }
         fragment.onEditModeEntered = { onEditModeEntered() }
         fragment.onEditModeExited = { onEditModeExited() }
-        fragment.onDocumentLoadError = { error -> fallbackToLegacyViewer(error) }
+        fragment.onDocumentLoadError = { error -> fallbackToBuiltInViewer(error) }
         fragment.onDocumentRequestFailed = { error ->
             Log.e(TAG, "AndroidX PDF render request failed", error)
             callbacks?.onPdfViewerError(error, PdfViewerRecovery.CONTINUE)
         }
     }
 
-    private fun fallbackToLegacyViewer(error: Throwable) {
-        if (hasFallenBackToLegacyViewer) return
+    private fun fallbackToBuiltInViewer(error: Throwable) {
+        if (isBuiltInViewerActive) return
         pendingPdfUri = null
-        Log.w(TAG, "AndroidX PDF failed to load; falling back to legacy viewer", error)
+        Log.w(TAG, "AndroidX PDF failed to load; falling back to the built-in viewer", error)
         callbacks?.onPdfViewerError(error, PdfViewerRecovery.LEGACY_FALLBACK)
         annotationWalkthrough?.dismiss(markFinished = false)
         annotationWalkthrough = null
         isUnsavedDialogOpen = false
-        fragmentContainer.visibility = View.GONE
-        legacyPdfView.visibility = View.VISIBLE
-        applyNightMode(isNight)
         updateState { copy(isEditing = false, isSaving = false) }
-        openPdfLegacy()
+        openBuiltInViewer()
         maybeLoadAdView()
     }
 
@@ -870,9 +872,7 @@ open class PdfActivityCompose : AppCompatActivity() {
     }
 
     private fun isAndroidxPdfViewerVisible(): Boolean =
-        !hasFallenBackToLegacyViewer &&
-            fragmentContainer.isVisible &&
-            legacyPdfView.visibility != View.VISIBLE
+        !isBuiltInViewerActive && fragmentContainer.isVisible
 
     private fun markAnnotationWalkthroughSeen(key: String) {
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit {
@@ -1113,11 +1113,10 @@ open class PdfActivityCompose : AppCompatActivity() {
     @SuppressLint("NewApi")
     private fun applyNightMode(enabled: Boolean) {
         val paint = if (enabled) pdfNightModePaint() else null
-        val layerType = if (enabled) View.LAYER_TYPE_HARDWARE else View.LAYER_TYPE_NONE
         if (isAndroidxPdfSupported()) {
             (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.setNightModePaint(paint)
         }
-        legacyPdfView.setLayerType(layerType, paint)
+        nightPaint = paint
     }
 
     // =====================================================================
@@ -1140,8 +1139,8 @@ open class PdfActivityCompose : AppCompatActivity() {
     private fun goToPage(page: Int) {
         isPagesSheetOpen = false
         if (page !in 0 until state.pageCount) return
-        if (hasFallenBackToLegacyViewer) {
-            legacyPdfView.jumpTo(page)
+        if (isBuiltInViewerActive) {
+            lifecycleScope.launch { builtInListState.scrollToItem(page) }
         } else if (isAndroidxPdfSupported()) {
             (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.scrollToPage(page)
         }

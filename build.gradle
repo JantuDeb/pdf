@@ -67,9 +67,6 @@ dependencies {
     implementation "androidx.ink:ink-geometry:$inkVersion"
     implementation "androidx.ink:ink-strokes:$inkVersion"
 
-    //Legacy Pdf library
-    implementation libs.androidpdfviewer
-
     // Compose: the reader's bars, sheets and messages (PdfActivityCompose)
     implementation libs.compose.ui
     implementation libs.compose.foundation
@@ -85,6 +82,8 @@ dependencies {
     if (hasCore) {
         // What only PdfActivity (src/views) needs.
         implementation project(':core')
+        // Legacy Pdf library (pdfium). PdfActivityCompose falls back to Android's own renderer.
+        implementation libs.androidpdfviewer
         implementation libs.constraintlayout
         implementation libs.kotlinx.coroutines.android
         implementation libs.lifecycle.viewmodel.ktx

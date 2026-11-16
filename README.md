@@ -1,7 +1,7 @@
 # StudyPath PDF module
 
 The PDF reader the StudyPath Android apps share: the AndroidX PDF viewer with annotation, a
-legacy viewer to fall back on, and everything around them (passwords, night mode, search,
+viewer to fall back on, and everything around them (passwords, night mode, search,
 download, the annotation walkthrough, the remembered page).
 
 It comes with two activities to subclass. They open, decrypt, save and recover in the same way;
@@ -27,7 +27,8 @@ Both activities:
 
 - Opens a PDF from the app's files, password-protected or not
 - Annotation (AndroidX PDF ink) with a pluggable save strategy, `PdfAnnotationSaver`
-- Falls back to the legacy viewer when AndroidX PDF cannot load the file or the device lacks it
+- Falls back to a plain viewer when AndroidX PDF cannot load the file or the device lacks it
+- Pages scroll vertically, one under the other, in every viewer
 - Night mode that keeps the page's colours instead of inverting them
 - Search in the document, fullscreen, orientation, download to the device's Downloads
 - A first-run walkthrough of the annotation tools
@@ -43,6 +44,21 @@ Both activities:
 - The page count once the file has loaded (`onDocumentLoaded`)
 - A message with "Try again" in place of the page when the file cannot be fetched or opened
 - Light and dark bars from `PdfTheme`, edge to edge
+
+### The fallback viewer
+
+AndroidX PDF with annotation needs SDK extension 18 of Android 12. When the device lacks it, or
+AndroidX cannot load a file, the reader shows the pages another way, without annotation or search:
+
+| Activity | Fallback | Cost |
+| --- | --- | --- |
+| `PdfActivityCompose` | Android's own `PdfRenderer`, drawn in Compose: vertical scroll, pinch and double-tap zoom, night mode, the page badge and page list | nothing added to the app |
+| `PdfActivity` | the legacy pdfium viewer (`androidpdfviewer`) | about 7 MB of native code per ABI |
+
+A password-protected file is unlocked by the platform before either viewer sees it: Android 15
+does it itself, Android 12 to 14 through the PDF system update (SDK extension 13). On a device
+with neither, `PdfActivityCompose` cannot open a locked file and says so; unlocked files open
+everywhere.
 
 ## Setup
 
@@ -76,14 +92,14 @@ The module reads these from the host's `libs` catalog:
 | `pdf-viewer-fragment` | `androidx.pdf:pdf-viewer-fragment` |
 | `pdf-ink` | `androidx.pdf:pdf-ink` |
 | version `ink` | the `androidx.ink` family |
-| `androidpdfviewer` | the legacy viewer (`com.github.barteksc.pdfviewer`) |
 | `compose-ui`, `compose-foundation`, `compose-material3` | Compose (AndroidX or JetBrains) |
 | `androidx-activity-compose` | `androidx.activity:activity-compose` |
 | `kotlinx-coroutines-core` | `org.jetbrains.kotlinx:kotlinx-coroutines-core` |
 | `lifecycle-runtime-ktx` | `androidx.lifecycle:lifecycle-runtime-ktx` |
 | `desugar-jdk-libs` | `com.android.tools:desugar_jdk_libs` |
 
-With `:core` present, also `constraintlayout`, `kotlinx-coroutines-android`,
+With `:core` present, also `androidpdfviewer` (the legacy viewer,
+`com.github.barteksc.pdfviewer`), `constraintlayout`, `kotlinx-coroutines-android`,
 `lifecycle-viewmodel-ktx`, `lifecycle-livedata-ktx` and, if the catalog has them, `firebase-bom`
 and `firebase-analytics`.
 
@@ -225,7 +241,8 @@ class ClassicPdfViewerActivity : PdfActivity() {
 
 - **"That didn't load" / "File not found"**: `PdfConfig.fileName` must name a file under the
   app's files directory, or `resolveSourceFile()` must point at it.
-- **The legacy viewer opens instead of the AndroidX one**: the working copy could not be served.
-  Check the `FileProvider` and its `cache-path`.
+- **Pages show but the pen and search are missing**: the fallback viewer is on screen. Either the
+  device lacks AndroidX PDF, or the working copy could not be served: check the `FileProvider`
+  and its `cache-path`.
 - **"Save not configured"**: `provideAnnotationSaver()` returns null.
 - **A crash inflating the viewer**: the activity's theme is not a Material 3 theme.
