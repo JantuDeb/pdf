@@ -32,7 +32,7 @@ interface PdfActivityCallbacks {
 
     /**
      * Called once the document is on screen and its page count is known, whichever viewer
-     * opened it. PdfActivityCompose only.
+     * opened it.
      */
     fun onDocumentLoaded(pageCount: Int) {}
 
@@ -71,7 +71,7 @@ interface PdfActivityCallbacks {
 
     /**
      * Optional custom popup menu resource for the overflow button.
-     * Return null to use PdfActivity's default generated menu.
+     * Return null to use the reader's default generated menu.
      */
     fun getPopupMenuResId(): Int? = null
 
@@ -93,7 +93,6 @@ interface PdfActivityCallbacks {
      *
      * Return true if you handled it. The reader's own tools ([PdfReaderTool.PAGES],
      * [PdfReaderTool.NIGHT]) run when this returns false; the rest are the host's alone.
-     * PdfActivityCompose only.
      */
     fun onReaderTool(tool: PdfReaderTool, page: Int): Boolean = false
 
@@ -158,6 +157,6 @@ enum class PdfViewerType {
     SOURCE_PREPARATION,
     ANDROIDX,
 
-    /** The viewer fallen back to: pdfium in PdfActivity, Android's own renderer in PdfActivityCompose. */
+    /** The viewer fallen back to when AndroidX PDF cannot show the file. */
     LEGACY,
 }

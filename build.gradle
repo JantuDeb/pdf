@@ -1,14 +1,9 @@
-// Applied by id, not by catalog alias: the hosts name their plugin aliases differently. Each host
-// puts both plugins on the build classpath in its root build file (`apply false`).
+// Applied by id, not by catalog alias: hosts name their plugin aliases differently. The host puts
+// both plugins on the build classpath in its root build file (`apply false`).
 plugins {
     id 'com.android.library'
     id 'org.jetbrains.kotlin.plugin.compose'
 }
-
-// The View-based PdfActivity draws its toolbar with resources from the old app's :core module.
-// A host without :core (studypath-mobile) builds the Compose reader, PdfActivityCompose, alone.
-def hasCore = findProject(':core') != null
-def catalog = extensions.getByType(VersionCatalogsExtension).named('libs')
 
 android {
     namespace 'com.thestudypath.pdf'
@@ -18,16 +13,6 @@ android {
         minSdk 31
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
-    }
-
-    sourceSets {
-        main {
-            if (hasCore) {
-                java.srcDirs += 'src/views/java'
-                kotlin.srcDirs += 'src/views/java'
-                res.srcDirs += 'src/views/res'
-            }
-        }
     }
 
     buildTypes {
@@ -67,7 +52,11 @@ dependencies {
     implementation "androidx.ink:ink-geometry:$inkVersion"
     implementation "androidx.ink:ink-strokes:$inkVersion"
 
-    // Compose: the reader's bars, sheets and messages (PdfActivityCompose)
+    // The viewer fallen back to when AndroidX PDF cannot show a file: Compose on Android's own
+    // PdfRenderer, no native code.
+    implementation libs.bouquet
+
+    // Compose: the reader's bars, sheets and messages
     implementation libs.compose.ui
     implementation libs.compose.foundation
     implementation libs.compose.material3
@@ -78,21 +67,6 @@ dependencies {
 
     // Lifecycle
     implementation libs.lifecycle.runtime.ktx
-
-    if (hasCore) {
-        // What only PdfActivity (src/views) needs.
-        implementation project(':core')
-        // Legacy Pdf library (pdfium). PdfActivityCompose falls back to Android's own renderer.
-        implementation libs.androidpdfviewer
-        implementation libs.constraintlayout
-        implementation libs.kotlinx.coroutines.android
-        implementation libs.lifecycle.viewmodel.ktx
-        implementation libs.lifecycle.livedata.ktx
-
-        // Firebase
-        catalog.findLibrary('firebase-bom').ifPresent { implementation platform(it) }
-        catalog.findLibrary('firebase-analytics').ifPresent { implementation it }
-    }
 
     coreLibraryDesugaring libs.desugar.jdk.libs
 }

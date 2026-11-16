@@ -4,7 +4,7 @@ import android.content.Intent
 import com.thestudypath.pdf.interfaces.PdfReaderTool
 
 /**
- * Configuration for [PdfActivity] and [PdfActivityCompose].
+ * Configuration for [PdfActivityCompose].
  * Each host app builds this from its own intent extras, shared prefs, etc.
  */
 data class PdfConfig(
@@ -20,7 +20,6 @@ data class PdfConfig(
     val showOrientationOption: Boolean = true,
     val showFullscreenButton: Boolean = true,
 
-    // ── PdfActivityCompose only ───────────────────────────────────────────
     /** A second, quieter line under the title: "Triangles · NCERT Solutions". */
     val subtitle: String? = null,
     /** The bookmark in the top bar. The host keeps what is bookmarked: see [PdfReaderTool.BOOKMARK]. */

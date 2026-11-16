@@ -21,7 +21,3 @@
 -keep class androidx.pdf.** { *; }
 -keep interface androidx.pdf.** { *; }
 -keep enum androidx.pdf.** { *; }
-
-# Keep the embedded legacy fallback viewer stable in release builds too.
--keep class com.github.barteksc.pdfviewer.** { *; }
--keep class com.shockwave.pdfium.** { *; }

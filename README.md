@@ -1,64 +1,76 @@
-# StudyPath PDF module
+# PDF reader module (Compose)
 
-The PDF reader the StudyPath Android apps share: the AndroidX PDF viewer with annotation, a
-viewer to fall back on, and everything around them (passwords, night mode, search,
-download, the annotation walkthrough, the remembered page).
+A PDF reader for Android to subclass and configure: the AndroidX PDF viewer with annotation, a
+plain viewer to fall back on, and everything around them drawn in Compose.
 
-It comes with two activities to subclass. They open, decrypt, save and recover in the same way;
-they differ in how the bars are drawn.
-
-| Activity | Bars | Needs |
-| --- | --- | --- |
-| `PdfActivityCompose` | Compose, drawn to the StudyPath design (Breeze) and themable | nothing from the host |
-| `PdfActivity` | Views and XML | the old app's `:core` module, for its toolbar icons |
-
-`PdfActivity` is compiled only when the host build has a `:core` project. A host without one
-(studypath-mobile) gets `PdfActivityCompose` alone.
+It knows nothing about the app it is in. Where the file comes from, what its password is, what
+"Ask" or "Save" do, how the bars look: the host says, through `PdfConfig`, a few overridable
+methods and `PdfActivityCallbacks`.
 
 ## Branches
 
-- `main`: `PdfActivity` only. What the Play Store app ships.
-- `compose`: `main` plus `PdfActivityCompose`. Merge `main` into it when `main` moves; a fix to
-  shared behaviour (opening, saving, fallback) then has to be made in `PdfActivityCompose` too.
+- `main`: the View-based reader (`PdfActivity`) the Play Store app ships. Needs the old app's
+  `:core` module.
+- `compose`: this reader, `PdfActivityCompose`, on its own. The two are not meant to be merged;
+  a fix to shared behaviour (opening, saving, falling back) is made in each.
 
-## What the reader does
-
-Both activities:
+## What it does
 
 - Opens a PDF from the app's files, password-protected or not
+- Pages scroll vertically, one under the other
 - Annotation (AndroidX PDF ink) with a pluggable save strategy, `PdfAnnotationSaver`
-- Falls back to a plain viewer when AndroidX PDF cannot load the file or the device lacks it
-- Pages scroll vertically, one under the other, in every viewer
 - Night mode that keeps the page's colours instead of inverting them
 - Search in the document, fullscreen, orientation, download to the device's Downloads
-- A first-run walkthrough of the annotation tools
-- An ad slot, and hooks for analytics, menus and page persistence (`PdfActivityCallbacks`)
-
-`PdfActivityCompose` adds:
-
-- A subtitle under the title, and a bookmark action
-- A page badge over the page ("6 / 10")
+- A top bar with a title, a subtitle and a bookmark; a page badge over the page ("6 / 10")
 - A row of tools under the page: Pages, Night, Ask, Save, Next (`PdfConfig.tools`)
-- A list of pages to jump to
-- "Back where you stopped: page 6" on reopening a file
-- The page count once the file has loaded (`onDocumentLoaded`)
+- A list of pages to jump to, and "Back where you stopped: page 6" on reopening a file
 - A message with "Try again" in place of the page when the file cannot be fetched or opened
+- A first-run walkthrough of the annotation tools
+- An ad slot, and hooks for analytics, menus, tools and page persistence
 - Light and dark bars from `PdfTheme`, edge to edge
 
-### The fallback viewer
+### The two viewers
 
-AndroidX PDF with annotation needs SDK extension 18 of Android 12. When the device lacks it, or
-AndroidX cannot load a file, the reader shows the pages another way, without annotation or search:
-
-| Activity | Fallback | Cost |
+| | When | Gives |
 | --- | --- | --- |
-| `PdfActivityCompose` | Android's own `PdfRenderer`, drawn in Compose: vertical scroll, pinch and double-tap zoom, night mode, the page badge and page list | nothing added to the app |
-| `PdfActivity` | the legacy pdfium viewer (`androidpdfviewer`) | about 7 MB of native code per ABI |
+| AndroidX PDF (`pdf-viewer-fragment`, `pdf-ink`) | the device has SDK extension 18 of Android 12 | everything above |
+| Fallback: [Bouquet](https://github.com/GRizzi91/bouquet) | the device lacks it, or AndroidX could not load the file | pages, vertical scroll, pinch and double-tap zoom, night mode, the page badge and list, the remembered page. No annotation, no search |
 
-A password-protected file is unlocked by the platform before either viewer sees it: Android 15
-does it itself, Android 12 to 14 through the PDF system update (SDK extension 13). On a device
-with neither, `PdfActivityCompose` cannot open a locked file and says so; unlocked files open
-everywhere.
+Bouquet is Compose on Android's own `PdfRenderer`: no native library comes with it.
+
+### Passwords
+
+The reader never asks the user for a password and never guesses where one comes from.
+
+1. The host gives the password in `PdfConfig.password`, if it has one.
+2. Before either viewer opens the file, `writeDecryptedPdfToFile()` writes an unlocked working
+   copy to the cache. It throws `PdfPasswordRequiredException` when the password is missing or
+   wrong.
+3. The reader then calls the host's `requestPdfPassword(isRetry)`. The host decides what that
+   means: fetch the key again, show its own prompt, or return null to give up. On null the reader
+   shows its "could not open" message and calls `onPdfPasswordRequestCancelled()`.
+
+The default `writeDecryptedPdfToFile()` leaves unlocking to the platform, which can do it on
+Android 15, and on Android 12 to 14 with the PDF system update (SDK extension 13). An app that
+must open locked files on every device overrides it with its own PDF library. With PdfBox:
+
+```kotlin
+override fun writeDecryptedPdfToFile(sourceFile: File, targetFile: File, password: String?) {
+    if (canOpenPdfWithoutPassword(sourceFile)) {
+        sourceFile.copyTo(targetFile, overwrite = true)
+        return
+    }
+    if (password.isNullOrEmpty()) throw PdfPasswordRequiredException()
+    try {
+        PDDocument.load(sourceFile, password).use { document ->
+            document.isAllSecurityToBeRemoved = true
+            document.save(targetFile)
+        }
+    } catch (_: InvalidPasswordException) {
+        throw PdfPasswordRequiredException(isIncorrectPassword = true)
+    }
+}
+```
 
 ## Setup
 
@@ -92,21 +104,17 @@ The module reads these from the host's `libs` catalog:
 | `pdf-viewer-fragment` | `androidx.pdf:pdf-viewer-fragment` |
 | `pdf-ink` | `androidx.pdf:pdf-ink` |
 | version `ink` | the `androidx.ink` family |
+| `bouquet` | `io.github.grizzi91:bouquet` |
 | `compose-ui`, `compose-foundation`, `compose-material3` | Compose (AndroidX or JetBrains) |
 | `androidx-activity-compose` | `androidx.activity:activity-compose` |
 | `kotlinx-coroutines-core` | `org.jetbrains.kotlinx:kotlinx-coroutines-core` |
 | `lifecycle-runtime-ktx` | `androidx.lifecycle:lifecycle-runtime-ktx` |
 | `desugar-jdk-libs` | `com.android.tools:desugar_jdk_libs` |
 
-With `:core` present, also `androidpdfviewer` (the legacy viewer,
-`com.github.barteksc.pdfviewer`), `constraintlayout`, `kotlinx-coroutines-android`,
-`lifecycle-viewmodel-ktx`, `lifecycle-livedata-ktx` and, if the catalog has them, `firebase-bom`
-and `firebase-analytics`.
-
 ### 3. Manifest
 
-The viewer reads the working copy of the file through a `FileProvider` that serves the cache
-directory. The default authority is `${applicationId}.fileprovider`; override
+The AndroidX viewer reads the working copy of the file through a `FileProvider` that serves the
+cache directory. The default authority is `${applicationId}.fileprovider`; override
 `fileProviderAuthority()` for another.
 
 ```xml
@@ -129,7 +137,7 @@ directory. The default authority is `${applicationId}.fileprovider`; override
 ```
 
 Declare your subclass with a Material 3 theme: the AndroidX viewer inflates Material widgets.
-`Theme.StudyPathPdf` gives them StudyPath's colours.
+`Theme.StudyPathPdf` is ready to use, or give your own.
 
 ```xml
 <activity
@@ -141,7 +149,7 @@ The module's `minSdk` is 31. An app with a lower one adds
 `<uses-sdk tools:overrideLibrary="com.thestudypath.pdf" />` and opens the reader only on
 Android 12 or newer.
 
-## `PdfActivityCompose`
+## Using it
 
 ```kotlin
 class ReaderActivity : PdfActivityCompose() {
@@ -169,6 +177,9 @@ class ReaderActivity : PdfActivityCompose() {
         downloadIfMissing(resolveSourceFile())
     }
 
+    // The app knows the password; the user never types one.
+    override suspend fun requestPdfPassword(isRetry: Boolean): String? = fetchKeyAgain()
+
     override fun provideCallbacks() = object : PdfActivityCallbacks {
         override fun onDocumentLoaded(pageCount: Int) = reportPageCount(pageCount)
 
@@ -185,8 +196,8 @@ class ReaderActivity : PdfActivityCompose() {
 }
 ```
 
-With the default `PdfConfig` (no `tools`) the reader has `PdfActivity`'s actions instead: night
-mode, search, fullscreen, download and the overflow menu, all in the top bar.
+With the default `PdfConfig` (no `tools`) there is no bottom bar: night mode, search, fullscreen,
+download and the overflow menu sit in the top bar.
 
 ### What to override
 
@@ -195,47 +206,29 @@ mode, search, fullscreen, download and the overflow menu, all in the top bar.
 | `providePdfConfig()` | the file, its title, which actions and tools show |
 | `preparePdfSource()` | fetching or importing the file before it opens |
 | `resolveSourceFile()` | where the file is, if not `filesDir/fileName` |
-| `writeDecryptedPdfToFile()` | files protected by the app rather than by a PDF password |
+| `writeDecryptedPdfToFile()` | how a locked file is unlocked |
+| `requestPdfPassword()` | what happens when a password is missing or wrong |
 | `provideAnnotationSaver()` | where saved annotations go |
 | `provideCallbacks()` | tools, menus, analytics, ads, the remembered page |
-| `requestPdfPassword()` | asking the user for a password |
 | `providePdfTheme(darkTheme)` | the colours and type of the bars |
 | `isDarkTheme()` | an app with its own light/dark setting |
 | `TopBar()`, `ToolBar()` | drawing a bar with the host's own components |
 
 And to call: `setBookmarked()`, `showMessage()`, `downloadPdf()`, `openPdf()`,
-`currentPageIndex`.
+`canOpenPdfWithoutPassword()`, `currentPageIndex`.
 
 ### Theme
 
 `PdfTheme` holds the colours (`PdfColors`) and text styles (`PdfTypography`) of everything the
-reader draws in Compose. The defaults are Breeze, light and dark, with the brand `#122DA4`. A host
-passes its own values and font:
+reader draws in Compose. The defaults are StudyPath's Breeze, light and dark; any host passes its
+own values and font:
 
 ```kotlin
 override fun providePdfTheme(darkTheme: Boolean) =
-    PdfTheme.default(darkTheme, fontFamily = Inter)
+    PdfTheme(colors = myColors(darkTheme), typography = pdfTypography(MyFont))
 ```
 
 Night mode is a different thing: it recolours the page and leaves the bars alone.
-
-## `PdfActivity`
-
-```kotlin
-class ClassicPdfViewerActivity : PdfActivity() {
-
-    override fun providePdfConfig() = PdfConfig(
-        fileName = intent.getStringExtra("file_name").orEmpty(),
-        displayName = intent.getStringExtra("display_name") ?: "Document.pdf",
-        isDownloadable = true,
-    )
-
-    override fun provideAnnotationSaver() = object : PdfAnnotationSaver {
-        override suspend fun save(workingFile: File, originalFile: File, password: String?) =
-            runCatching { workingFile.copyTo(originalFile, overwrite = true); Unit }
-    }
-}
-```
 
 ## Troubleshooting
 
@@ -244,5 +237,7 @@ class ClassicPdfViewerActivity : PdfActivity() {
 - **Pages show but the pen and search are missing**: the fallback viewer is on screen. Either the
   device lacks AndroidX PDF, or the working copy could not be served: check the `FileProvider`
   and its `cache-path`.
+- **A locked file does not open on an older phone**: the platform could not unlock it. Override
+  `writeDecryptedPdfToFile()`.
 - **"Save not configured"**: `provideAnnotationSaver()` returns null.
 - **A crash inflating the viewer**: the activity's theme is not a Material 3 theme.

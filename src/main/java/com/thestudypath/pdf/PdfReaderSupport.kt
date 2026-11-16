@@ -21,8 +21,8 @@ import android.view.ViewTreeObserver
 import java.io.File
 import java.io.FileInputStream
 
-// What PdfActivityCompose shares with nothing on screen: the same file handling and night filter
-// as PdfActivity, kept apart from the activity so they can be read and tested on their own.
+// The reader's file handling and night filter, kept apart from the activity so they can be read
+// and tested on their own.
 
 /**
  * AndroidX PDF with annotation needs SDK extension 18 of Android 12. Below that: the fallback viewer.
@@ -56,7 +56,7 @@ internal fun pdfNightModePaint(): Paint {
     return Paint().apply { colorFilter = ColorMatrixColorFilter(nightMatrix) }
 }
 
-internal fun canOpenPdfWithoutPassword(sourceFile: File): Boolean =
+internal fun isPdfOpenWithoutPassword(sourceFile: File): Boolean =
     runCatching {
         ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
             PdfRenderer(inputFd).use { renderer -> renderer.pageCount >= 0 }
@@ -78,7 +78,7 @@ internal fun writeDecryptedPdf(
     targetFile: File,
     password: String?,
 ) {
-    if (canOpenPdfWithoutPassword(sourceFile)) {
+    if (isPdfOpenWithoutPassword(sourceFile)) {
         sourceFile.copyTo(targetFile, overwrite = true)
         return
     }

@@ -21,7 +21,6 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresExtension
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,6 +37,10 @@ import androidx.core.view.size
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.pdf.ink.EditablePdfViewerFragment
+import com.rizzi.bouquet.PdfLoadState
+import com.rizzi.bouquet.PdfReaderConfig
+import com.rizzi.bouquet.PdfSource
+import com.rizzi.bouquet.VerticalPdfReaderState
 import com.thestudypath.pdf.interfaces.PdfActivityCallbacks
 import com.thestudypath.pdf.interfaces.PdfAnnotationSaver
 import com.thestudypath.pdf.interfaces.PdfMenuAction
@@ -62,7 +65,6 @@ import com.thestudypath.pdf.ui.PdfUnsavedChangesDialog
 import com.thestudypath.pdf.walkthrough.PdfAnnotationWalkthrough
 import com.thestudypath.pdf.walkthrough.SpotlightCardPlacement
 import com.thestudypath.pdf.walkthrough.SpotlightStep
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -76,8 +78,8 @@ import java.io.IOException
 /**
  * The PDF reader with its bars, messages and sheets drawn in Compose.
  *
- * It does everything [PdfActivity] does, the same way: password-protected files, the AndroidX
- * viewer with annotation and a viewer to fall back on, the colour-preserving night
+ * It opens password-protected files, shows them in the AndroidX viewer with annotation or, where
+ * that cannot, in a plain viewer to fall back on, and brings the colour-preserving night
  * mode, search, fullscreen, download, the annotation walkthrough, the ad slot and the remembered
  * page. The PDF itself stays in ordinary views (ink drawing redraws properly there); only what is
  * around it is Compose.
@@ -136,12 +138,10 @@ open class PdfActivityCompose : AppCompatActivity() {
     private var introWalkthroughScheduled = false
     private var isBuiltInViewerActive = false
 
-    // The built-in viewer: Android's own renderer, when AndroidX PDF cannot show the file.
-    private var builtInRenderer by mutableStateOf<PdfPageRenderer?>(null)
-    private var builtInListState by mutableStateOf(LazyListState())
+    // The fallback viewer, when AndroidX PDF cannot show the file.
+    private var builtInReader by mutableStateOf<VerticalPdfReaderState?>(null)
     private var nightPaint by mutableStateOf<Paint?>(null)
     private var openJob: Job? = null
-    private var builtInJob: Job? = null
     private var snackbarJob: Job? = null
 
     private val actions =
@@ -226,8 +226,7 @@ open class PdfActivityCompose : AppCompatActivity() {
         pendingPdfUri = null
         annotationWalkthrough?.dismiss(markFinished = false)
         annotationWalkthrough = null
-        builtInRenderer?.close()
-        builtInRenderer = null
+        builtInReader = null
         cleanupWorkingFile("onDestroy")
         super.onDestroy()
     }
@@ -278,8 +277,10 @@ open class PdfActivityCompose : AppCompatActivity() {
     protected open fun shouldAutoOpenPdf(): Boolean = true
 
     /**
-     * Called when a password-protected PDF needs a password before it can be opened.
-     * Return null to cancel the open attempt.
+     * Called when a password-protected PDF needs a password, or the one given did not open it.
+     * The reader shows no password prompt of its own: the host decides whether to ask the user,
+     * fetch the key again, or give up. Return null to give up; the reader then shows its
+     * "could not open" message.
      */
     protected open suspend fun requestPdfPassword(isRetry: Boolean): String? = null
 
@@ -395,12 +396,20 @@ open class PdfActivityCompose : AppCompatActivity() {
             }
         }
         builtInViewerView.setContent {
-            val renderer = builtInRenderer ?: return@setContent
-            val listState = builtInListState
-            LaunchedEffect(listState) {
-                snapshotFlow { listState.firstVisibleItemIndex }.collect { onPageShown(it) }
+            val reader = builtInReader ?: return@setContent
+            LaunchedEffect(reader) {
+                snapshotFlow { reader.loadState }.collect { loadState ->
+                    when (loadState) {
+                        is PdfLoadState.Loaded -> onDocumentLoaded(loadState.pageCount)
+                        is PdfLoadState.Error -> onBuiltInViewerFailed(reader.error)
+                        else -> Unit
+                    }
+                }
             }
-            PdfBuiltInPages(renderer.aspectRatios, listState, nightPaint, renderer::render)
+            LaunchedEffect(reader) {
+                snapshotFlow { reader.currentPage }.collect { page -> if (reader.isLoaded) onPageShown(page) }
+            }
+            PdfBuiltInPages(reader, nightPaint)
         }
         pageOverlayView.setContent {
             ReaderTheme { PdfPageOverlay(state, actions, snackbarMessage) }
@@ -573,28 +582,25 @@ open class PdfActivityCompose : AppCompatActivity() {
     }
 
     /**
-     * Shows the prepared file with Android's own renderer: pages only, scrolled vertically, with
-     * zoom and night mode. No native library, no search, no annotation.
+     * Shows the prepared file in the fallback viewer (Bouquet, on Android's own renderer): pages
+     * only, scrolled vertically, with zoom and night mode. No search, no annotation.
      */
     private fun openBuiltInViewer() {
         showBuiltInViewer()
         setStatus(PdfReaderStatus.Loading)
-        builtInJob?.cancel()
-        builtInJob =
-            lifecycleScope.launch {
-                runCatching { PdfPageRenderer.open(getWorkingFile()) }
-                    .onSuccess { renderer ->
-                        builtInRenderer?.close()
-                        builtInListState = LazyListState(currentPage.coerceIn(0, (renderer.pageCount - 1).coerceAtLeast(0)))
-                        builtInRenderer = renderer
-                        onDocumentLoaded(renderer.pageCount)
-                    }.onFailure { error ->
-                        if (error is CancellationException) throw error
-                        Log.e(TAG, "Built-in PDF viewer failed", error)
-                        callbacks?.onPdfOpenFailed(error, PdfViewerType.LEGACY)
-                        showFailure(getString(R.string.pdf_error_open))
-                    }
-            }
+        builtInReader =
+            VerticalPdfReaderState(
+                source = PdfSource.File(getWorkingFile()),
+                config = PdfReaderConfig(),
+                initialPage = currentPage,
+            )
+    }
+
+    private fun onBuiltInViewerFailed(error: Throwable?) {
+        val cause = error ?: IOException("The fallback viewer could not open the PDF")
+        Log.e(TAG, "Fallback PDF viewer failed", cause)
+        callbacks?.onPdfOpenFailed(cause, PdfViewerType.LEGACY)
+        showFailure(getString(R.string.pdf_error_open))
     }
 
     /** The page on screen changed, in either viewer. */
@@ -620,14 +626,22 @@ open class PdfActivityCompose : AppCompatActivity() {
     }
 
     /**
-     * Writes the unlocked copy of [sourceFile] the viewer opens. Hosts with their own protection
-     * (a file encrypted by the app, not by a PDF password) override this.
+     * Writes the unlocked copy of [sourceFile] the viewers open.
+     *
+     * The default leaves unlocking to the platform, which can do it on Android 15, and on Android
+     * 12 to 14 with the PDF system update. A host that must open locked files everywhere overrides
+     * this with its own PDF library (PdfBox, for one): copy the file when
+     * [canOpenPdfWithoutPassword], throw [PdfPasswordRequiredException] when the password is
+     * missing or wrong, otherwise write the file without its protection.
      */
     protected open fun writeDecryptedPdfToFile(
         sourceFile: File,
         targetFile: File,
         password: String?,
     ) = writeDecryptedPdf(sourceFile, targetFile, password)
+
+    /** True when [sourceFile] opens as it is: it has no password, or is not locked at all. */
+    protected fun canOpenPdfWithoutPassword(sourceFile: File): Boolean = isPdfOpenWithoutPassword(sourceFile)
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun initializePdfViewerFragmentWhenReady(uri: Uri) {
@@ -1140,7 +1154,7 @@ open class PdfActivityCompose : AppCompatActivity() {
         isPagesSheetOpen = false
         if (page !in 0 until state.pageCount) return
         if (isBuiltInViewerActive) {
-            lifecycleScope.launch { builtInListState.scrollToItem(page) }
+            lifecycleScope.launch { builtInReader?.scrollToPage(page) }
         } else if (isAndroidxPdfSupported()) {
             (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.scrollToPage(page)
         }
@@ -1349,7 +1363,7 @@ open class PdfActivityCompose : AppCompatActivity() {
     companion object {
         private const val FRAGMENT_TAG = "pdf_viewer_fragment_tag"
 
-        // Shared with PdfActivity: night mode and the walkthroughs are remembered once per app.
+        // The names the View reader on main uses: night mode and the walkthroughs carry over.
         private const val PREFS_NAME = "generic_pdf_prefs"
         private const val KEY_PDF_DARK = "isPdfDark"
         private const val KEY_ANNOTATION_INTRO_SEEN = "pdf_annotation_intro_seen"
