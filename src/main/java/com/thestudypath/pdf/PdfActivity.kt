@@ -1,3 +1,5 @@
+@file:OptIn(androidx.pdf.ExperimentalPdfApi::class)
+
 package com.thestudypath.pdf
 
 import android.annotation.SuppressLint
@@ -8,6 +10,7 @@ import android.content.res.Configuration
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.pdf.LoadParams
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
@@ -22,12 +25,12 @@ import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.OnBackPressedCallback
 import androidx.annotation.RequiresApi
 import androidx.annotation.RequiresExtension
@@ -35,23 +38,32 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentManager
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.pdf.ink.EditablePdfViewerFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.materialswitch.MaterialSwitch
 import com.thestudypath.pdf.interfaces.PdfActivityCallbacks
 import com.thestudypath.pdf.interfaces.PdfAnnotationSaver
 import com.thestudypath.pdf.interfaces.PdfMenuAction
-import kotlinx.coroutines.CoroutineScope
+import com.thestudypath.pdf.interfaces.PdfViewerRecovery
+import com.thestudypath.pdf.interfaces.PdfViewerType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import androidx.core.content.edit
 import com.github.barteksc.pdfviewer.PDFView
 import com.github.barteksc.pdfviewer.scroll.DefaultScrollHandle
 import com.github.barteksc.pdfviewer.util.FitPolicy
+import com.thestudypath.pdf.walkthrough.PdfAnnotationWalkthrough
+import com.thestudypath.pdf.walkthrough.SpotlightCardPlacement
+import com.thestudypath.pdf.walkthrough.SpotlightStep
+import androidx.core.view.isVisible
+import androidx.core.view.size
+import androidx.core.view.get
 
 /**
  * A fully self-contained PDF viewing/editing activity.
@@ -86,13 +98,15 @@ open class PdfActivity : AppCompatActivity() {
     // ── Views ─────────────────────────────────────────────────────────────
     private lateinit var constraintLayoutPdfHeader: View
     private lateinit var adContainer: FrameLayout
-    private lateinit var materialSwitch: MaterialSwitch
+    private lateinit var themeToggleContainer: View
+    private lateinit var materialSwitch: ImageButton
     private lateinit var buttonBack: ImageButton
     private lateinit var buttonSave: ImageButton
     private lateinit var buttonCloseEdit: ImageButton
     private lateinit var buttonSearch: ImageButton
     private lateinit var buttonFullscreen: ImageButton
     private lateinit var buttonPopup: ImageButton
+    private lateinit var buttonDownload: ImageButton
     private lateinit var textViewTitle: TextView
 
     private lateinit var flPdfViewFragment: FrameLayout
@@ -102,39 +116,15 @@ open class PdfActivity : AppCompatActivity() {
     private var isInEditMode = false
     private var isNight = false
     private var currentPage: Int = 0
-    private var pdfUri: Uri? = null
+    private var pendingPdfUri: Uri? = null
     private var workingFileCleanupDone: Boolean = false
-    private var pendingSaveAsSourceFile: File? = null
-
-    private val saveAsLauncher = registerForActivityResult(
-        ActivityResultContracts.CreateDocument("application/pdf")
-    ) { targetUri ->
-        val sourceFile = pendingSaveAsSourceFile
-        pendingSaveAsSourceFile = null
-
-        if (targetUri == null) {
-            Toast.makeText(this, "Save As cancelled", Toast.LENGTH_SHORT).show()
-            return@registerForActivityResult
-        }
-
-        if (sourceFile == null || !sourceFile.exists()) {
-            Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
-            return@registerForActivityResult
-        }
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            val success = copyFileToUri(sourceFile, targetUri)
-            withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    this@PdfActivity,
-                    if (success) "PDF saved" else "Save As failed",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
-    }
+    private var annotationWalkthrough: PdfAnnotationWalkthrough? = null
+    private var adLoadRequested = false
+    private var introWalkthroughScheduled = false
+    private var hasFallenBackToLegacyViewer = false
 
     private lateinit var legacyPdfView: PDFView
+    private lateinit var loadingIndicator: View
 
     // =====================================================================
     //  LIFECYCLE
@@ -142,6 +132,7 @@ open class PdfActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        removeRestoredPdfViewerFragment()
         setContentView(getLayoutResId())
 
         // 1. Let subclass / host provide configuration
@@ -149,16 +140,10 @@ open class PdfActivity : AppCompatActivity() {
         annotationSaver = provideAnnotationSaver()
         callbacks = provideCallbacks()
 
+        registerActiveWorkingFile()
+
         // Best-effort startup cleanup in case a prior session was killed before onDestroy.
-        runCatching {
-            val staleWorkingFile = getWorkingFile()
-            if (staleWorkingFile.exists()) {
-                val deleted = staleWorkingFile.delete()
-                Log.d(TAG, "Startup stale cleanup: deleted=$deleted")
-            }
-        }.onFailure {
-            Log.w(TAG, "Startup stale cleanup failed", it)
-        }
+        cleanupStaleWorkingFiles()
 
         // 2. Restore page
         currentPage = callbacks?.getPagePersistence()?.loadPage(pdfConfig.fileName)
@@ -187,12 +172,8 @@ open class PdfActivity : AppCompatActivity() {
             prepareAndOpenPdf()
         }
 
-        // 8. Ads — host provides the view, we just slot it in
-        callbacks?.getAdView()?.let { adView ->
-            adContainer.removeAllViews()
-            adContainer.addView(adView)
-            adContainer.visibility = View.VISIBLE
-        }
+        // 8. Ads — loaded straight away, kept hidden while a walkthrough is on screen.
+        maybeLoadAdView()
 
         // 9. Notify host
         callbacks?.onPdfOpened(pdfConfig)
@@ -202,8 +183,16 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        pendingPdfUri = null
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
         cleanupWorkingFile("onDestroy")
         super.onDestroy()
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        tryInitializePendingPdfViewer()
     }
 
     override fun onStop() {
@@ -289,6 +278,7 @@ open class PdfActivity : AppCompatActivity() {
     private fun bindViews() {
 
         legacyPdfView = findViewById(R.id.legacy_pdf_view)
+        loadingIndicator = findViewById(R.id.pdf_loading_indicator)
         flPdfViewFragment = findViewById(R.id.fragment_pdf_container)
 
         if (isPdfEditingSupported()) {
@@ -300,7 +290,8 @@ open class PdfActivity : AppCompatActivity() {
 
         constraintLayoutPdfHeader = findViewById(R.id.pdf_top_header)
         adContainer = findViewById(R.id.fl_adplaceholder)
-        materialSwitch = findViewById(R.id.material_switch)
+        themeToggleContainer = findViewById(R.id.material_switch)
+        materialSwitch = findViewById(com.studypath.core.R.id.theme_toggle_button)
         textViewTitle = findViewById(R.id.text_title)
         buttonBack = findViewById(R.id.btn_back)
         buttonSave = findViewById(R.id.btn_save_exit)
@@ -308,6 +299,7 @@ open class PdfActivity : AppCompatActivity() {
         buttonSearch = findViewById(R.id.btn_search)
         buttonFullscreen = findViewById(R.id.btn_menu_full)
         buttonPopup = findViewById(R.id.btn_popup)
+        buttonDownload = findViewById(R.id.btn_download)
 
         textViewTitle.text = pdfConfig.displayName ?: pdfConfig.fileName
 
@@ -321,6 +313,12 @@ open class PdfActivity : AppCompatActivity() {
             }
         }
         buttonPopup.setOnClickListener { showPopupMenu(it) }
+        buttonDownload.visibility = if (pdfConfig.showDownloadOption) View.VISIBLE else View.GONE
+        buttonDownload.setOnClickListener {
+            if (callbacks?.onMenuAction(PdfMenuAction.DOWNLOAD) != true) {
+                handleDefaultMenuAction(PdfMenuAction.DOWNLOAD)
+            }
+        }
 
         buttonSave.visibility = View.GONE
         buttonSave.setOnClickListener { performSaveAnnotations() }
@@ -334,7 +332,7 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     private fun applyFeatureFlags() {
-        if (!pdfConfig.showNightModeToggle) materialSwitch.visibility = View.GONE
+        if (!pdfConfig.showNightModeToggle) themeToggleContainer.visibility = View.GONE
         if (!pdfConfig.showSearchButton) buttonSearch.visibility = View.GONE
         if (!pdfConfig.showFullscreenButton) buttonFullscreen.visibility = View.GONE
         if (!pdfConfig.showEditButtons) {
@@ -351,39 +349,89 @@ open class PdfActivity : AppCompatActivity() {
     private fun prepareAndOpenPdf() {
         lifecycleScope.launch {
             while (true) {
+                setPdfLoading(true)
                 val prepareResult = withContext(Dispatchers.IO) { preparePdfSource() }
-                if (prepareResult.isSuccess) {
-                    if (isPdfEditingSupported()) {
-                        openPdf()
-                    } else {
-                        Toast.makeText(
-                            this@PdfActivity,
-                            "PDF annotation not supported on this device",
-                            Toast.LENGTH_LONG
-                        ).show()
-                        openPdfLegacy()
-                    }
-                    return@launch
-                }
-
-                val error = prepareResult.exceptionOrNull()
-                if (error is PdfPasswordRequiredException) {
-                    val password = requestPdfPassword(error.isIncorrectPassword)
-                    if (password == null) {
-                        onPdfPasswordRequestCancelled()
+                val preparationError = prepareResult.exceptionOrNull()
+                if (preparationError != null) {
+                    if (preparationError is PdfPasswordRequiredException) {
+                        setPdfLoading(false)
+                        if (requestUpdatedPassword(preparationError)) {
+                            continue
+                        }
                         return@launch
                     }
 
-                    pdfConfig = pdfConfig.copy(password = password)
-                    onPdfPasswordUpdated(password)
-                    continue
+                    setPdfLoading(false)
+                    callbacks?.onPdfOpenFailed(
+                        preparationError,
+                        PdfViewerType.SOURCE_PREPARATION
+                    )
+                    Toast.makeText(
+                        this@PdfActivity,
+                        preparationError.message ?: "Failed to open PDF",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@launch
                 }
 
-                val message = error?.message ?: "Failed to open PDF"
-                Toast.makeText(this@PdfActivity, message, Toast.LENGTH_SHORT).show()
+                if (!isPdfEditingSupported()) {
+                    Toast.makeText(
+                        this@PdfActivity,
+                        "PDF annotation not supported on this device",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    openPdfLegacy()
+                    return@launch
+                }
+
+                val sourceFile = getOriginalFile()
+                val uriResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        if (!sourceFile.exists()) {
+                            throw IOException("PDF source file was not found")
+                        }
+                        prepareDecryptedPdfUri(sourceFile, pdfConfig.password)
+                    }
+                }
+                val error = uriResult.exceptionOrNull()
+                if (error is PdfPasswordRequiredException) {
+                    setPdfLoading(false)
+                    if (requestUpdatedPassword(error)) {
+                        continue
+                    }
+                    return@launch
+                }
+                if (error != null) {
+                    callbacks?.onPdfOpenFailed(error, PdfViewerType.SOURCE_PREPARATION)
+                    fallbackToLegacyViewer(error)
+                    return@launch
+                }
+
+                val uri = uriResult.getOrThrow()
+                initializePdfViewerFragmentWhenReady(uri)
                 return@launch
             }
         }
+    }
+
+    private suspend fun requestUpdatedPassword(error: PdfPasswordRequiredException): Boolean {
+        val resumedState = lifecycle.currentStateFlow.first { state ->
+            state == Lifecycle.State.DESTROYED ||
+                state.isAtLeast(Lifecycle.State.RESUMED)
+        }
+        if (!resumedState.isAtLeast(Lifecycle.State.RESUMED)) {
+            return false
+        }
+
+        val password = requestPdfPassword(error.isIncorrectPassword)
+        if (password.isNullOrEmpty()) {
+            onPdfPasswordRequestCancelled()
+            return false
+        }
+
+        pdfConfig = pdfConfig.copy(password = password)
+        onPdfPasswordUpdated(password)
+        return true
     }
 
     private fun isPdfEditingSupported(): Boolean {
@@ -392,20 +440,24 @@ open class PdfActivity : AppCompatActivity() {
 
 
     private fun openPdfLegacy() {
+        hasFallenBackToLegacyViewer = true
         val sourceFile = getOriginalFile()
         if (!sourceFile.exists()) {
+            setPdfLoading(false)
             Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
             return
         }
 
         Log.d(TAG, "openPdfLegacy: ${sourceFile.path} ")
+        setPdfLoading(true)
 
 //        val file = getFileStreamPath(sourceFile)
         try {
             legacyPdfView.fromFile(sourceFile)
                 .enableSwipe(true)
                 .defaultPage(currentPage)
-                .nightMode(isNight)
+                // Use the same color-preserving filter as the modern renderer.
+                .nightMode(false)
                 .enableSwipe(true)
                 .swipeHorizontal(false)
                 .enableDoubletap(true)
@@ -415,102 +467,130 @@ open class PdfActivity : AppCompatActivity() {
                     callbacks?.onPageChanged(currentPage)
                 }
                 .enableAnnotationRendering(true)
+                .onLoad { setPdfLoading(false) }
                 .onRender { legacyPdfView.fitToWidth(currentPage) }
-                .onError { t: Throwable -> Log.d(TAG, " onError" + t.message) }
+                .onError { error ->
+                    setPdfLoading(false)
+                    Log.e(TAG, "Legacy PDF viewer failed", error)
+                    callbacks?.onPdfOpenFailed(error, PdfViewerType.LEGACY)
+                }
                 .scrollHandle(DefaultScrollHandle(this)).swipeHorizontal(false)
                 .enableAntialiasing(true)
-                .spacing(10).pageFitPolicy(FitPolicy.WIDTH).load()
+                .spacing(1).pageFitPolicy(FitPolicy.WIDTH).load()
 
         } catch (e: Exception) {
+            setPdfLoading(false)
             e.message?.let { Log.d(TAG, it) }
             e.printStackTrace()
         }
     }
 
-    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
-    private fun openPdf() {
-        try {
-            val sourceFile = getOriginalFile()
-            if (!sourceFile.exists()) {
-                Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
-                return
-            }
-            CoroutineScope(Dispatchers.IO).launch {
-                val uri = prepareDecryptedPdfUri(sourceFile, pdfConfig.password)
-                withContext(Dispatchers.Main) {
-                    if (uri != null) {
-                        pdfUri = uri
-                        initializePdfViewerFragment(uri)
-                    } else {
-                        Toast.makeText(
-                            this@PdfActivity,
-                            "Failed to open PDF",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+    private fun setPdfLoading(loading: Boolean) {
+        if (::loadingIndicator.isInitialized) loadingIndicator.isVisible = loading
     }
 
     @SuppressLint("NewApi")
-    private fun prepareDecryptedPdfUri(sourceFile: File, password: String?): Uri? {
-        return try {
-            val workingFile = getWorkingFile()
+    private fun prepareDecryptedPdfUri(sourceFile: File, password: String?): Uri {
+        val workingFile = getWorkingFile()
+        if (workingFile.exists() && !workingFile.delete()) {
+            throw IOException("Unable to replace the previous prepared PDF")
+        }
+        writeDecryptedPdfToFile(sourceFile, workingFile, password)
+        return getUriForFile(workingFile)
+            ?: throw IOException("Unable to create a URI for the prepared PDF")
+    }
 
-            if (password.isNullOrEmpty()) {
-                // No password — just copy to working location
-                sourceFile.copyTo(workingFile, overwrite = true)
-            } else {
-                // Decrypt using PdfRenderer
-                val inputFd = ParcelFileDescriptor.open(
-                    sourceFile, ParcelFileDescriptor.MODE_READ_ONLY
-                )
-                val loadParams = LoadParams.Builder().setPassword(password).build()
-                val renderer = PdfRenderer(inputFd, loadParams)
-                val outputFd = ParcelFileDescriptor.open(
-                    workingFile,
-                    ParcelFileDescriptor.MODE_CREATE or
-                            ParcelFileDescriptor.MODE_READ_WRITE or
-                            ParcelFileDescriptor.MODE_TRUNCATE
-                )
-                renderer.write(outputFd, true)
-                outputFd.close()
-                renderer.close()
+    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
+    private fun initializePdfViewerFragmentWhenReady(uri: Uri) {
+        pendingPdfUri = uri
+        tryInitializePendingPdfViewer()
+    }
+
+    @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
+    private fun tryInitializePendingPdfViewer() {
+        val uri = pendingPdfUri ?: return
+        if (
+            isFinishing ||
+                isDestroyed ||
+                !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) ||
+                supportFragmentManager.isStateSaved
+        ) {
+            return
+        }
+
+        flPdfViewFragment.runWhenMeasured {
+            if (
+                pendingPdfUri == uri &&
+                    !isFinishing &&
+                    !isDestroyed &&
+                    lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                    !supportFragmentManager.isStateSaved
+            ) {
+                pendingPdfUri = null
+                initializePdfViewerFragment(uri)
             }
-
-            getUriForFile(workingFile)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
         }
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun initializePdfViewerFragment(uri: Uri) {
-        val fm: FragmentManager = supportFragmentManager
-        pdfViewerFragment = fm.findFragmentByTag(FRAGMENT_TAG) as? EditablePdfViewerFragment
+        try {
+            val fm: FragmentManager = supportFragmentManager
+            pdfViewerFragment = fm.findFragmentByTag(FRAGMENT_TAG) as? EditablePdfViewerFragment
 
-        if (pdfViewerFragment == null) {
-            val fragment = EditablePdfViewerFragmentExtended()
-            pdfViewerFragment = fragment
+            if (pdfViewerFragment == null) {
+                val fragment = EditablePdfViewerFragmentExtended()
+                pdfViewerFragment = fragment
 
-            fm.beginTransaction()
-                .replace(R.id.fragment_pdf_container, fragment, FRAGMENT_TAG)
-                .commitAllowingStateLoss()
-            fm.executePendingTransactions()
+                fm.beginTransaction()
+                    .replace(R.id.fragment_pdf_container, fragment, FRAGMENT_TAG)
+                    .commitNow()
 
-            setupEditModeCallbacks(fragment)
+                setupEditModeCallbacks(fragment)
 //            fragment.markDocumentLoaded()
-        } else {
-            (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.let {
-                setupEditModeCallbacks(it)
+            } else {
+                (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.let {
+                    setupEditModeCallbacks(it)
+                }
             }
+
+            applyNightMode(isNight)
+            pdfViewerFragment?.documentUri = uri
+            // The androidx viewer shows its own progress indicator from here on.
+            setPdfLoading(false)
+            introWalkthroughScheduled = true
+            flPdfViewFragment.postDelayed({ maybeShowAnnotationIntroWalkthrough() }, WALKTHROUGH_DELAY_MS)
+        } catch (error: Throwable) {
+            fallbackToLegacyViewer(error)
+        }
+    }
+
+    private fun removeRestoredPdfViewerFragment() {
+        supportFragmentManager.findFragmentByTag(FRAGMENT_TAG)?.let { fragment ->
+            supportFragmentManager.beginTransaction()
+                .remove(fragment)
+                .commitAllowingStateLoss()
+            supportFragmentManager.executePendingTransactions()
+        }
+    }
+
+    private fun View.runWhenMeasured(action: () -> Unit) {
+        if (width > 0 && height > 0) {
+            action()
+            return
         }
 
-        pdfViewerFragment?.documentUri = uri
+        viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (width > 0 && height > 0) {
+                    if (viewTreeObserver.isAlive) {
+                        viewTreeObserver.removeOnPreDrawListener(this)
+                    }
+                    action()
+                }
+                return true
+            }
+        })
     }
 
     // =====================================================================
@@ -519,8 +599,37 @@ open class PdfActivity : AppCompatActivity() {
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
     private fun setupEditModeCallbacks(fragment: EditablePdfViewerFragmentExtended) {
+        fragment.initialPage = currentPage
+        fragment.onPageChanged = { page ->
+            if (currentPage != page) {
+                currentPage = page
+                saveCurrentPage()
+                callbacks?.onPageChanged(page)
+            }
+        }
         fragment.onEditModeEntered = { onEditModeEntered() }
         fragment.onEditModeExited = { onEditModeExited() }
+        fragment.onDocumentLoadError = { error -> fallbackToLegacyViewer(error) }
+        fragment.onDocumentRequestFailed = { error ->
+            Log.e(TAG, "AndroidX PDF render request failed", error)
+            callbacks?.onPdfViewerError(error, PdfViewerRecovery.CONTINUE)
+        }
+    }
+
+    private fun fallbackToLegacyViewer(error: Throwable) {
+        if (hasFallenBackToLegacyViewer) return
+        pendingPdfUri = null
+        Log.w(TAG, "AndroidX PDF failed to load; falling back to legacy viewer", error)
+        callbacks?.onPdfViewerError(error, PdfViewerRecovery.LEGACY_FALLBACK)
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
+        buttonSave.visibility = View.GONE
+        buttonCloseEdit.visibility = View.GONE
+        buttonSearch.visibility = View.GONE
+        flPdfViewFragment.visibility = View.GONE
+        legacyPdfView.visibility = View.VISIBLE
+        openPdfLegacy()
+        maybeLoadAdView()
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 13)
@@ -529,20 +638,268 @@ open class PdfActivity : AppCompatActivity() {
         buttonSave.visibility = if (pdfConfig.showEditButtons) View.VISIBLE else View.GONE
         buttonCloseEdit.visibility = if (pdfConfig.showEditButtons) View.VISIBLE else View.GONE
         buttonBack.visibility = View.GONE
-        materialSwitch.visibility = View.GONE
+        themeToggleContainer.visibility = View.GONE
         buttonSearch.visibility = View.GONE
+        buttonDownload.visibility = View.GONE
         pdfViewerFragment?.isTextSearchActive = false
         callbacks?.onEditModeChanged(true)
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
+        flPdfViewFragment.postDelayed({ maybeShowEditModeWalkthrough() }, WALKTHROUGH_DELAY_MS)
     }
 
     private fun onEditModeExited() {
         isInEditMode = false
+        annotationWalkthrough?.dismiss(markFinished = false)
+        annotationWalkthrough = null
         buttonSave.visibility = View.GONE
         buttonCloseEdit.visibility = View.GONE
         buttonBack.visibility = View.VISIBLE
-        if (pdfConfig.showNightModeToggle) materialSwitch.visibility = View.VISIBLE
+        if (pdfConfig.showNightModeToggle) themeToggleContainer.visibility = View.VISIBLE
         if (pdfConfig.showSearchButton) buttonSearch.visibility = View.VISIBLE
+        if (pdfConfig.showDownloadOption) buttonDownload.visibility = View.VISIBLE
         callbacks?.onEditModeChanged(false)
+        maybeLoadAdView()
+    }
+
+    // =====================================================================
+    //  ANNOTATION WALKTHROUGH
+    // =====================================================================
+
+    private fun maybeShowAnnotationIntroWalkthrough() {
+        introWalkthroughScheduled = false
+        if (isInEditMode || !shouldShowAnnotationWalkthrough(KEY_ANNOTATION_INTRO_SEEN)) {
+            maybeLoadAdView()
+            return
+        }
+
+        annotationWalkthrough?.dismiss(markFinished = false)
+        val walkthrough = PdfAnnotationWalkthrough(this)
+        annotationWalkthrough = walkthrough
+        hideAdDuringWalkthrough()
+        walkthrough.start(
+            steps = listOf(
+                SpotlightStep(
+                    targetRectProvider = { findEditButtonRect() ?: fallbackEditButtonRect() },
+                    title = "Annotate PDFs",
+                    message = "Tap the pen button to draw, highlight, and mark important steps.",
+                ),
+            ),
+            onFinished = {
+                markAnnotationWalkthroughSeen(KEY_ANNOTATION_INTRO_SEEN)
+                annotationWalkthrough = null
+                maybeLoadAdView()
+            },
+        )
+    }
+
+    private fun maybeShowEditModeWalkthrough() {
+        if (!isInEditMode) return
+        if (!shouldShowAnnotationWalkthrough(KEY_ANNOTATION_EDIT_SEEN)) {
+            maybeLoadAdView()
+            return
+        }
+
+        annotationWalkthrough?.dismiss(markFinished = false)
+        val walkthrough = PdfAnnotationWalkthrough(this)
+        annotationWalkthrough = walkthrough
+        hideAdDuringWalkthrough()
+        walkthrough.start(
+            steps = listOf(
+                SpotlightStep(
+                    targetRectProvider = { findAnnotationControlsRect() ?: fallbackAnnotationToolbarRect() },
+                    title = "Choose a tool",
+                    message = "Tap pen or highlighter. Tap the selected pen again to change thickness, and use color to switch ink.",
+                    cardPlacement = SpotlightCardPlacement.TOP,
+                ),
+                SpotlightStep(
+                    target = buttonSave,
+                    title = "Save annotations",
+                    message = "Tap save when you want to keep your notes in this PDF.",
+                ),
+                SpotlightStep(
+                    target = buttonCloseEdit,
+                    title = "Exit edit mode",
+                    message = "Close editing when you are done. If changes are unsaved, we will ask before closing.",
+                ),
+            ),
+            onFinished = {
+                markAnnotationWalkthroughSeen(KEY_ANNOTATION_EDIT_SEEN)
+                annotationWalkthrough = null
+                maybeLoadAdView()
+            },
+        )
+    }
+
+    private fun isWalkthroughActive(): Boolean =
+        annotationWalkthrough != null || introWalkthroughScheduled
+
+    /** INVISIBLE rather than GONE so the layout (and the spotlight targets) do not shift. */
+    private fun hideAdDuringWalkthrough() {
+        if (adLoadRequested) adContainer.visibility = View.INVISIBLE
+    }
+
+    private fun maybeLoadAdView() {
+        if (isWalkthroughActive()) return
+        if (adLoadRequested) {
+            adContainer.visibility = View.VISIBLE
+            return
+        }
+
+        callbacks?.getAdView()?.let { adView ->
+            adLoadRequested = true
+            adContainer.removeAllViews()
+            adContainer.addView(adView)
+            adContainer.visibility = View.VISIBLE
+        }
+    }
+
+    private fun shouldShowAnnotationWalkthrough(key: String): Boolean {
+        if (!isPdfEditingSupported()) return false
+        if (!isAndroidxPdfViewerVisible()) return false
+        if (!pdfConfig.showEditButtons) return false
+        return !getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(key, false)
+    }
+
+    private fun isAndroidxPdfViewerVisible(): Boolean {
+        return !hasFallenBackToLegacyViewer &&
+                flPdfViewFragment.isVisible &&
+                legacyPdfView.visibility != View.VISIBLE
+    }
+
+    private fun markAnnotationWalkthroughSeen(key: String) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit {
+            putBoolean(key, true)
+        }
+    }
+
+    private fun findAnnotationToolbarRect(): RectF? {
+        val fragmentView = pdfViewerFragment?.view ?: return null
+        val toolbar = findViewByClassName(fragmentView, "AnnotationToolbar") ?: return null
+        if (toolbar.width == 0 || toolbar.height == 0 || toolbar.visibility != View.VISIBLE) return null
+        return rectInOverlayCoordinates(toolbar, padding = 8f)
+    }
+
+    private fun findAnnotationControlsRect(): RectF? {
+        val fragmentView = pdfViewerFragment?.view ?: return null
+        val annotationRects = mutableListOf<RectF>()
+        collectAnnotationControlRects(fragmentView, annotationRects)
+
+        val toolbarRect = findAnnotationToolbarRect()
+        if (toolbarRect != null) {
+            annotationRects += toolbarRect
+        }
+
+        return annotationRects
+            .takeIf { it.isNotEmpty() }
+            ?.reduce { union, rect ->
+                union.apply { union(rect) }
+            }
+    }
+
+    private fun collectAnnotationControlRects(view: View, output: MutableList<RectF>) {
+        if (view.visibility != View.VISIBLE || view.width == 0 || view.height == 0) return
+
+        if (isAnnotationControlView(view)) {
+            val rect = rectInOverlayCoordinates(view, padding = 8f)
+            if (isReasonableAnnotationControlRect(rect)) {
+                output += rect
+            }
+        }
+
+        val group = view as? android.view.ViewGroup ?: return
+        for (index in 0 until group.childCount) {
+            collectAnnotationControlRects(group.getChildAt(index), output)
+        }
+    }
+
+    private fun isAnnotationControlView(view: View): Boolean {
+        val name = view.javaClass.name
+        if (!name.startsWith("androidx.pdf")) return false
+        if (name.contains("PdfView")) return false
+
+        val controlNameHints = listOf(
+            "Annotation",
+            "Toolbar",
+            "Palette",
+            "Brush",
+            "Color",
+            "Pen",
+            "Highlighter",
+            "Eraser",
+            "Ink",
+        )
+        if (controlNameHints.none { name.contains(it, ignoreCase = true) }) return false
+
+        val rect = rectInOverlayCoordinates(view, padding = 0f)
+        val screenHeight = window.decorView.height
+        return rect.bottom > screenHeight * 0.45f
+    }
+
+    private fun isReasonableAnnotationControlRect(rect: RectF): Boolean {
+        val screenWidth = window.decorView.width.toFloat()
+        val screenHeight = window.decorView.height.toFloat()
+        if (rect.width() < 24f || rect.height() < 24f) return false
+        if (rect.height() > screenHeight * 0.34f) return false
+        if (rect.width() > screenWidth * 0.98f && rect.height() > screenHeight * 0.18f) return false
+        return rect.bottom > screenHeight * 0.45f
+    }
+
+    private fun findEditButtonRect(): RectF? {
+        val fragmentView = pdfViewerFragment?.view ?: return null
+        val editButton = findViewByClassName(fragmentView, "FloatingActionButton")
+            ?: findViewByClassName(fragmentView, "ExtendedFloatingActionButton")
+            ?: return null
+        if (editButton.width == 0 || editButton.height == 0 || editButton.visibility != View.VISIBLE) return null
+        val rect = rectInOverlayCoordinates(editButton, padding = 8f)
+        val containerRect = rectInOverlayCoordinates(flPdfViewFragment, padding = 0f)
+        if (rect.centerY() < containerRect.centerY()) return null
+        return rect
+    }
+
+    private fun findViewByClassName(view: View, classNamePart: String): View? {
+        if (view.javaClass.name.contains(classNamePart)) return view
+        val group = view as? android.view.ViewGroup ?: return null
+        for (index in 0 until group.childCount) {
+            findViewByClassName(group.getChildAt(index), classNamePart)?.let { return it }
+        }
+        return null
+    }
+
+    private fun fallbackAnnotationToolbarRect(): RectF {
+        val containerRect = rectInOverlayCoordinates(flPdfViewFragment, padding = 0f)
+        val toolbarHeight = 92f * resources.displayMetrics.density
+        return RectF(
+            containerRect.left + 16f,
+            containerRect.bottom - toolbarHeight - 16f,
+            containerRect.right - 16f,
+            containerRect.bottom - 16f,
+        )
+    }
+
+    private fun fallbackEditButtonRect(): RectF {
+        val containerRect = rectInOverlayCoordinates(flPdfViewFragment, padding = 0f)
+        val size = 76f * resources.displayMetrics.density
+        val margin = 28f * resources.displayMetrics.density
+        return RectF(
+            containerRect.right - size - margin,
+            containerRect.bottom - size - margin,
+            containerRect.right - margin,
+            containerRect.bottom - margin,
+        )
+    }
+
+    private fun rectInOverlayCoordinates(view: View, padding: Float): RectF {
+        val viewLocation = IntArray(2)
+        val decorLocation = IntArray(2)
+        view.getLocationOnScreen(viewLocation)
+        window.decorView.getLocationOnScreen(decorLocation)
+        return RectF(
+            viewLocation[0] - decorLocation[0] - padding,
+            viewLocation[1] - decorLocation[1] - padding,
+            viewLocation[0] - decorLocation[0] + view.width + padding,
+            viewLocation[1] - decorLocation[1] + view.height + padding,
+        )
     }
 
     @RequiresExtension(extension = Build.VERSION_CODES.S, version = 18)
@@ -631,37 +988,53 @@ open class PdfActivity : AppCompatActivity() {
         isNight = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             .getBoolean(KEY_PDF_DARK, false)
 
-        materialSwitch.isChecked = isNight
+        updateNightModeIcon()
         applyNightMode(isNight)
 
-        materialSwitch.setOnCheckedChangeListener { _, isChecked ->
+        materialSwitch.setOnClickListener {
+            val isChecked = !isNight
             isNight = isChecked
             getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit {
                     putBoolean(KEY_PDF_DARK, isChecked)
                 }
+            updateNightModeIcon()
             applyNightMode(isChecked)
         }
     }
 
+    private fun updateNightModeIcon() {
+        materialSwitch.setImageResource(
+            if (isNight) com.studypath.core.R.drawable.ic_light_mode
+            else com.studypath.core.R.drawable.ic_night_mode
+        )
+    }
+
     private fun applyNightMode(enabled: Boolean) {
-        val container = findViewById<FrameLayout>(R.id.fragment_pdf_container) ?: return
-        if (enabled) {
-            val invertMatrix = ColorMatrix(
+        val paint = if (enabled) {
+            // Invert luminance, retaining a softened version of the original hue.
+            // Full RGB inversion turns blue headings into harsh yellow/orange.
+            // Map white paper to charcoal (32) and black text to off-white (232).
+            val chroma = 0.55f
+            val contrast = 200f / 255f
+            val red = (chroma + contrast) * 0.2126f
+            val green = (chroma + contrast) * 0.7152f
+            val blue = (chroma + contrast) * 0.0722f
+            val nightMatrix = ColorMatrix(
                 floatArrayOf(
-                    -1f, 0f, 0f, 0f, 255f,
-                    0f, -1f, 0f, 0f, 255f,
-                    0f, 0f, -1f, 0f, 255f,
+                    chroma - red, -green, -blue, 0f, 232f,
+                    -red, chroma - green, -blue, 0f, 232f,
+                    -red, -green, chroma - blue, 0f, 232f,
                     0f, 0f, 0f, 1f, 0f
                 )
             )
-            val paint = Paint().apply {
-                colorFilter = ColorMatrixColorFilter(invertMatrix)
+            Paint().apply {
+                colorFilter = ColorMatrixColorFilter(nightMatrix)
             }
-            container.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
-        } else {
-            container.setLayerType(View.LAYER_TYPE_NONE, null)
-        }
+        } else null
+        val layerType = if (enabled) View.LAYER_TYPE_HARDWARE else View.LAYER_TYPE_NONE
+        (pdfViewerFragment as? EditablePdfViewerFragmentExtended)?.setNightModePaint(paint)
+        legacyPdfView.setLayerType(layerType, paint)
     }
 
     // =====================================================================
@@ -693,6 +1066,7 @@ open class PdfActivity : AppCompatActivity() {
 
         if (customMenuResId != null) {
             popup.menuInflater.inflate(customMenuResId, popup.menu)
+            applyConfiguredMenuVisibility(popup.menu)
         } else {
             buildDefaultPopupMenu(popup.menu)
         }
@@ -715,6 +1089,24 @@ open class PdfActivity : AppCompatActivity() {
         popup.show()
     }
 
+    private fun applyConfiguredMenuVisibility(menu: Menu) {
+        for (index in 0 until menu.size) {
+            val item = menu[index]
+            val action = resolveDefaultMenuAction(item.itemId)
+                ?: callbacks?.mapMenuItemToAction(item.itemId, item.title)
+
+            when (action) {
+                PdfMenuAction.CHANGE_ORIENTATION ->
+                    item.isVisible = pdfConfig.showOrientationOption
+
+                PdfMenuAction.DOWNLOAD ->
+                    item.isVisible = pdfConfig.showDownloadOption
+
+                null -> Unit
+            }
+        }
+    }
+
     private fun buildDefaultPopupMenu(menu: Menu) {
         if (pdfConfig.showOrientationOption) {
             menu.add(0, MENU_ORIENTATION, 0, "Change Orientation")
@@ -722,16 +1114,12 @@ open class PdfActivity : AppCompatActivity() {
         if (pdfConfig.showDownloadOption) {
             menu.add(0, MENU_DOWNLOAD, 1, "Download PDF")
         }
-        if (pdfConfig.showSaveAsOption) {
-            menu.add(0, MENU_SAVE_AS, 2, "Save As")
-        }
     }
 
     private fun resolveDefaultMenuAction(itemId: Int): PdfMenuAction? {
         return when (itemId) {
             MENU_ORIENTATION -> PdfMenuAction.CHANGE_ORIENTATION
             MENU_DOWNLOAD -> PdfMenuAction.DOWNLOAD
-            MENU_SAVE_AS -> PdfMenuAction.SAVE_AS
             else -> null
         }
     }
@@ -753,56 +1141,6 @@ open class PdfActivity : AppCompatActivity() {
                     showDownloadUnavailableDialog()
                 }
             }
-
-            PdfMenuAction.SAVE_AS -> {
-                savePdfAs()
-            }
-        }
-    }
-
-    private fun savePdfAs() {
-        // Prefer the working file because it contains the rendered/annotated document.
-        val sourceFile = getSaveAsSourceFile()
-        if (!sourceFile.exists()) {
-            Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        pendingSaveAsSourceFile = sourceFile
-        val suggestedName = buildSuggestedPdfFileName(sourceFile)
-        saveAsLauncher.launch(suggestedName)
-    }
-
-    private fun buildSuggestedPdfFileName(sourceFile: File): String {
-        val baseName = (pdfConfig.displayName ?: pdfConfig.fileName)
-            .ifBlank { sourceFile.name }
-            .trim()
-
-        return if (baseName.endsWith(".pdf", ignoreCase = true)) {
-            baseName
-        } else {
-            "$baseName.pdf"
-        }
-    }
-
-    private fun getSaveAsSourceFile(): File {
-        val workingFile = getWorkingFile()
-        return if (workingFile.exists() && workingFile.length() > 0L) {
-            workingFile
-        } else {
-            getOriginalFile()
-        }
-    }
-
-    private fun copyFileToUri(sourceFile: File, targetUri: Uri): Boolean {
-        return try {
-            contentResolver.openOutputStream(targetUri)?.use { outputStream ->
-                FileInputStream(sourceFile).use { inputStream ->
-                    inputStream.copyTo(outputStream)
-                }
-            } != null
-        } catch (_: Exception) {
-            false
         }
     }
 
@@ -811,20 +1149,24 @@ open class PdfActivity : AppCompatActivity() {
     // =====================================================================
 
     @SuppressLint("NewApi")
-    private fun downloadPdf() {
+    protected fun downloadPdf() {
         val sourceFile = getOriginalFile()
         if (!sourceFile.exists()) return
 
         Toast.makeText(this, "PDF is being downloaded…", Toast.LENGTH_SHORT).show()
 
-        CoroutineScope(Dispatchers.IO).launch {
-            val success = decryptAndCopyToDownloads(
+        lifecycleScope.launch(Dispatchers.IO) {
+            val downloadedFileUri = decryptAndCopyToDownloads(
                 sourceFile,
                 pdfConfig.displayName ?: pdfConfig.fileName,
                 pdfConfig.password
             )
             withContext(Dispatchers.Main) {
-                if (success) {
+                if (downloadedFileUri != null) {
+                    callbacks?.onDownloadSucceeded(
+                        pdfConfig.displayName ?: pdfConfig.fileName,
+                        downloadedFileUri
+                    )
                     Toast.makeText(applicationContext, "PDF download completed", Toast.LENGTH_SHORT)
                         .show()
                 } else {
@@ -840,30 +1182,11 @@ open class PdfActivity : AppCompatActivity() {
         sourceFile: File,
         displayName: String,
         password: String?
-    ): Boolean {
+    ): Uri? {
         return try {
             val decryptedFile = File(filesDir, "de_${sourceFile.name}")
 
-            // Decrypt
-            val inputFd = ParcelFileDescriptor.open(
-                sourceFile, ParcelFileDescriptor.MODE_READ_ONLY
-            )
-            val renderer = if (!password.isNullOrEmpty()) {
-                val params = LoadParams.Builder().setPassword(password).build()
-                PdfRenderer(inputFd, params)
-            } else {
-                PdfRenderer(inputFd)
-            }
-            val outputFd = ParcelFileDescriptor.open(
-                decryptedFile,
-                ParcelFileDescriptor.MODE_CREATE or
-                        ParcelFileDescriptor.MODE_READ_WRITE or
-                        ParcelFileDescriptor.MODE_TRUNCATE
-            )
-
-            renderer.write(outputFd, true)
-            outputFd.close()
-            renderer.close()
+            writeDecryptedPdfToFile(sourceFile, decryptedFile, password)
 
             // Copy to MediaStore Downloads
             val contentValues = ContentValues().apply {
@@ -881,12 +1204,48 @@ open class PdfActivity : AppCompatActivity() {
                     }
                 }
                 decryptedFile.delete()
-                true
-            } ?: false
+                targetUri
+            }
         } catch (e: Exception) {
             e.printStackTrace()
-            false
+            null
         }
+    }
+
+    @SuppressLint("NewApi")
+    protected open fun writeDecryptedPdfToFile(sourceFile: File, targetFile: File, password: String?) {
+        if (canOpenPdfWithoutPassword(sourceFile)) {
+            sourceFile.copyTo(targetFile, overwrite = true)
+            return
+        }
+        if (password.isNullOrEmpty()) {
+            throw PdfPasswordRequiredException()
+        }
+
+        ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
+            val loadParams = LoadParams.Builder().setPassword(password).build()
+            PdfRenderer(inputFd, loadParams).use { renderer ->
+                ParcelFileDescriptor.open(
+                    targetFile,
+                    ParcelFileDescriptor.MODE_CREATE or
+                            ParcelFileDescriptor.MODE_READ_WRITE or
+                            ParcelFileDescriptor.MODE_TRUNCATE
+                ).use { outputFd ->
+                    renderer.write(outputFd, true)
+                }
+            }
+        }
+    }
+
+    @SuppressLint("NewApi")
+    protected fun canOpenPdfWithoutPassword(sourceFile: File): Boolean {
+        return runCatching {
+            ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { inputFd ->
+                PdfRenderer(inputFd).use { renderer ->
+                    renderer.pageCount >= 0
+                }
+            }
+        }.getOrDefault(false)
     }
 
     // =====================================================================
@@ -924,9 +1283,45 @@ open class PdfActivity : AppCompatActivity() {
     //  HELPERS
     // =====================================================================
 
-    private fun getWorkingFile(): File = File(cacheDir, "working_${pdfConfig.fileName}")
+    private fun getWorkingFileName(): String = buildWorkingFileName(pdfConfig.fileName)
+
+    private fun getWorkingFile(): File = File(cacheDir, getWorkingFileName())
 
     private fun getOriginalFile(): File = File(filesDir, pdfConfig.fileName)
+
+    private fun registerActiveWorkingFile() {
+        synchronized(activeWorkingFiles) {
+            activeWorkingFiles += getWorkingFileName()
+        }
+    }
+
+    private fun unregisterActiveWorkingFile() {
+        synchronized(activeWorkingFiles) {
+            activeWorkingFiles -= getWorkingFileName()
+        }
+    }
+
+    private fun cleanupStaleWorkingFiles() {
+        runCatching {
+            val activeFilesSnapshot = synchronized(activeWorkingFiles) {
+                activeWorkingFiles.toSet()
+            }
+
+            cacheDir.listFiles()
+                ?.asSequence()
+                ?.filter { it.isFile && it.name.startsWith(WORKING_FILE_PREFIX) }
+                ?.filterNot { it.name in activeFilesSnapshot }
+                ?.forEach { staleWorkingFile ->
+                    val deleted = staleWorkingFile.delete()
+                    Log.d(
+                        TAG,
+                        "Startup stale cleanup: file=${staleWorkingFile.name}, deleted=$deleted"
+                    )
+                }
+        }.onFailure {
+            Log.w(TAG, "Startup stale cleanup failed", it)
+        }
+    }
 
     private fun getUriForFile(file: File): Uri? {
         return try {
@@ -941,13 +1336,18 @@ open class PdfActivity : AppCompatActivity() {
     }
 
     private fun applyStatusBarStyle() {
-        // Light status bar icons when in light theme
+        // The PDF inversion preference is independent of the activity's theme.
+        val isDarkTheme = resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
         WindowCompat.getInsetsController(window, window.decorView)
-            .isAppearanceLightStatusBars = !isNight
+            .isAppearanceLightStatusBars = !isDarkTheme
     }
 
     private fun cleanupWorkingFile(reason: String) {
-        if (workingFileCleanupDone) return
+        if (workingFileCleanupDone) {
+            unregisterActiveWorkingFile()
+            return
+        }
 
         runCatching {
             val workingFile = getWorkingFile()
@@ -965,6 +1365,8 @@ open class PdfActivity : AppCompatActivity() {
         }.onFailure {
             Log.w(TAG, "cleanupWorkingFile($reason) failed", it)
         }
+
+        unregisterActiveWorkingFile()
     }
 
     // =====================================================================
@@ -975,11 +1377,18 @@ open class PdfActivity : AppCompatActivity() {
         private const val FRAGMENT_TAG = "pdf_viewer_fragment_tag"
         private const val PREFS_NAME = "generic_pdf_prefs"
         private const val KEY_PDF_DARK = "isPdfDark"
+        private const val KEY_ANNOTATION_INTRO_SEEN = "pdf_annotation_intro_seen"
+        private const val KEY_ANNOTATION_EDIT_SEEN = "pdf_annotation_edit_seen"
+        private const val WORKING_FILE_PREFIX = "working_"
+        private const val WALKTHROUGH_DELAY_MS = 450L
 
         private const val MENU_ORIENTATION = 1
         private const val MENU_DOWNLOAD = 2
-        private const val MENU_SAVE_AS = 3
 
         private const val TAG = "PdfActivity"
+
+        private val activeWorkingFiles = mutableSetOf<String>()
+
+        private fun buildWorkingFileName(fileName: String): String = "$WORKING_FILE_PREFIX$fileName"
     }
 }

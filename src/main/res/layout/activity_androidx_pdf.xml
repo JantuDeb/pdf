@@ -47,6 +47,14 @@
             app:barrierDirection="end"
             app:constraint_referenced_ids="btn_back,btn_close_edit" />
 
+        <androidx.constraintlayout.widget.Barrier
+            android:id="@+id/barrier_right_buttons"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:barrierAllowsGoneWidgets="false"
+            app:barrierDirection="start"
+            app:constraint_referenced_ids="btn_save_exit,material_switch,btn_search,btn_menu_full,btn_download,btn_popup" />
+
         <TextView
             android:id="@+id/text_title"
             android:layout_width="0dp"
@@ -58,7 +66,7 @@
             android:textColor="@color/blue_dark"
             android:textAppearance="?attr/textAppearanceTitleMedium"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@id/btn_save_exit"
+            app:layout_constraintEnd_toStartOf="@id/barrier_right_buttons"
             app:layout_constraintStart_toEndOf="@id/barrier_left_buttons"
             app:layout_constraintTop_toTopOf="parent"
             tools:text="Exercise 1.1" />
@@ -72,18 +80,17 @@
             android:src="@drawable/ic_download_done_24"
             android:visibility="gone"
             app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toStartOf="@id/material_switch"
+            app:layout_constraintEnd_toStartOf="@id/btn_menu_full"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <com.google.android.material.materialswitch.MaterialSwitch
+        <include
             android:id="@+id/material_switch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            layout="@layout/action_theme_toggle"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@id/btn_search"
-            app:layout_constraintTop_toTopOf="parent"
-
-            />
+            app:layout_constraintTop_toTopOf="parent" />
 
         <ImageButton
             android:id="@+id/btn_search"
@@ -104,6 +111,18 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Fullscreen"
             android:src="@drawable/ic_fullscreeen_menu"
+            app:tint="?attr/colorPrimary"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/btn_download"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <ImageButton
+            android:id="@+id/btn_download"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Download PDF"
+            android:src="@drawable/ic_toolbar_download"
             app:tint="?attr/colorPrimary"
             app:layout_constraintBottom_toBottomOf="parent"
             app:layout_constraintEnd_toStartOf="@id/btn_popup"
@@ -135,9 +154,9 @@
 
     <com.github.barteksc.pdfviewer.PDFView
         android:id="@+id/legacy_pdf_view"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_marginBottom="5dp"
+        android:background="@color/pdf_viewport_background"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         app:layout_constraintBottom_toTopOf="@id/fl_adplaceholder"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -145,10 +164,39 @@
         android:visibility="gone"
         />
 
+    <!-- Shown while the PDF is being prepared (decryption can take a while for large files). -->
+    <LinearLayout
+        android:id="@+id/pdf_loading_indicator"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:elevation="4dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@id/fl_adplaceholder"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/pdf_top_header">
+
+        <com.google.android.material.progressindicator.CircularProgressIndicator
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:indeterminate="true" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/pdf_loading_text"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textColor="?android:attr/textColorSecondary" />
+    </LinearLayout>
+
     <FrameLayout
         android:id="@+id/fl_adplaceholder"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:paddingTop="24dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent" />

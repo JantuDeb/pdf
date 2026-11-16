@@ -1,5 +1,6 @@
 package com.thestudypath.pdf.interfaces
 
+import android.net.Uri
 import android.view.View
 import com.thestudypath.pdf.PdfConfig
 import java.io.File
@@ -40,6 +41,15 @@ interface PdfActivityCallbacks {
 
     /** Called when annotations fail to save. */
     fun onAnnotationSaveFailed(error: Throwable) {}
+
+    /** Called when the AndroidX PDF viewer reports a recoverable load or render/fetch failure. */
+    fun onPdfViewerError(error: Throwable, recovery: PdfViewerRecovery) {}
+
+    /** Called when the active viewer ultimately fails to open/render the PDF. */
+    fun onPdfOpenFailed(error: Throwable, viewer: PdfViewerType) {}
+
+    /** Called after a PDF download completes successfully. */
+    fun onDownloadSucceeded(displayName: String, fileUri: Uri) {}
 
     /**
      * Return a View to display in the ad container at the top, or null for no ads.
@@ -96,6 +106,16 @@ interface PagePersistence {
 
 enum class PdfMenuAction {
     DOWNLOAD,
-    SAVE_AS,
     CHANGE_ORIENTATION
+}
+
+enum class PdfViewerRecovery {
+    CONTINUE,
+    LEGACY_FALLBACK,
+}
+
+enum class PdfViewerType {
+    SOURCE_PREPARATION,
+    ANDROIDX,
+    LEGACY,
 }

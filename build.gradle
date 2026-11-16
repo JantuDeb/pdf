@@ -1,39 +1,39 @@
 plugins {
-    alias(libs.plugins.android.library)
-    alias(libs.plugins.compose.compiler)
+    alias libs.plugins.android.library
+    alias libs.plugins.jetbrains.kotlin.parcelize
 }
 
 android {
-    namespace = 'com.thestudypath.pdf'
-    compileSdk = 37
+    namespace 'com.thestudypath.pdf'
+    compileSdk 37
 
     defaultConfig {
-        minSdk = 31
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        minSdk 31
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
     }
 
     buildTypes {
         release {
+            minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
     compileOptions {
-        coreLibraryDesugaringEnabled = true
-        sourceCompatibility = JavaVersion.VERSION_21
-        targetCompatibility = JavaVersion.VERSION_21
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
     buildFeatures {
-        buildConfig = true
-        compose = true
+        buildConfig true
     }
     lint {
-        targetSdk = 37
+        targetSdk 37
     }
 }
 
-
 dependencies {
+    implementation project(':core')
 
     implementation libs.appcompat
     implementation libs.material
@@ -43,15 +43,17 @@ dependencies {
     implementation libs.pdf.viewer.fragment
     implementation libs.pdf.ink
 
+    // pdf-ink beta01 still resolves Ink 1.0.0, whose V33 renderer can close
+    // while a queued draw is pending. Keep the Ink family aligned on the
+    // lifecycle-fixed release.
+    def inkVersion = libs.versions.ink.get()
+    implementation "androidx.ink:ink-authoring:$inkVersion"
+    implementation "androidx.ink:ink-brush:$inkVersion"
+    implementation "androidx.ink:ink-geometry:$inkVersion"
+    implementation "androidx.ink:ink-strokes:$inkVersion"
+
     //Legacy Pdf library
     implementation libs.androidpdfviewer
-
-    // Compose
-    implementation platform(libs.androidx.compose.bom)
-    implementation libs.androidx.compose.ui
-    implementation libs.androidx.compose.material3
-    implementation libs.androidx.compose.ui.tooling.preview
-    implementation libs.androidx.activity.compose
 
 
     // Coroutines
@@ -59,9 +61,15 @@ dependencies {
     implementation libs.kotlinx.coroutines.android
 
     // Lifecycle
-    implementation libs.androidx.lifecycle.runtime.ktx
-    implementation libs.androidx.pdf.compose
+    implementation libs.lifecycle.viewmodel.ktx
+    implementation libs.lifecycle.livedata.ktx
+    implementation libs.lifecycle.runtime.ktx
 
+    // Ads
+    
+    // Firebase
+    implementation platform(libs.firebase.bom)
+    implementation libs.firebase.analytics
 
     coreLibraryDesugaring libs.desugar.jdk.libs
 }
