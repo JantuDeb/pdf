@@ -72,6 +72,21 @@ override fun writeDecryptedPdfToFile(sourceFile: File, targetFile: File, passwor
 }
 ```
 
+PdfBox ships about 760 KB of font tables as assets (160 KB of download), and R8 does not shrink
+assets. Unlocking and locking never read them, so an app that uses PdfBox for nothing else leaves
+them out of its APK:
+
+```groovy
+android {
+    androidResources {
+        // aapt's defaults, plus PdfBox's font tables (assets/com/tom_roush).
+        ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:<dir>tom_roush'
+    }
+}
+```
+
+Do not do this in an app that draws text with PdfBox or extracts text from PDFs: both read them.
+
 ## Setup
 
 ### 1. Include the module
