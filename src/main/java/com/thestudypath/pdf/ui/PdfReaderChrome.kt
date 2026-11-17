@@ -2,6 +2,7 @@ package com.thestudypath.pdf.ui
 
 import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
@@ -391,7 +392,7 @@ fun PdfPageOverlay(
     }
 }
 
-/** "6 / 10": the page on screen and how many there are. */
+/** "6 / 10": the page on screen and how many there are. A light raised pill, so it reads over any page. */
 @Composable
 private fun PageBadge(
     page: Int,
@@ -404,13 +405,14 @@ private fun PageBadge(
         stringResource(R.string.pdf_page_indicator, page, pageCount),
         modifier =
             modifier
+                .pdfShadow(theme.colors, PillShape, y = 10, blur = 24, alpha = if (theme.colors.isDark) 0.5f else 0.16f)
                 .clip(PillShape)
-                .background(theme.colors.inverse)
+                .background(theme.colors.surfaceRaised)
                 .semantics { contentDescription(description) }
                 .padding(horizontal = 12.dp, vertical = 4.dp),
         // Figures of one width, so the badge does not twitch as pages go by.
         style = theme.typography.badge.copy(fontFeatureSettings = "tnum"),
-        color = theme.colors.onInverse,
+        color = theme.colors.ink,
         maxLines = 1,
     )
 }
@@ -419,7 +421,7 @@ private fun androidx.compose.ui.semantics.SemanticsPropertyReceiver.contentDescr
     this[androidx.compose.ui.semantics.SemanticsProperties.ContentDescription] = listOf(text)
 }
 
-/** News that needs no decision: a dark slab that leaves by itself. 14dp from the sides, 22dp up. */
+/** News that needs no decision: a light raised card that leaves by itself. 14dp from the sides, 22dp up. */
 @Composable
 private fun PdfSnackbar(
     message: String,
@@ -434,11 +436,12 @@ private fun PdfSnackbar(
                 .fillMaxWidth()
                 .pdfShadow(theme.colors, SnackbarShape, y = 10, blur = 24, alpha = if (theme.colors.isDark) 0.5f else 0.16f)
                 .clip(SnackbarShape)
-                .background(theme.colors.inverse)
+                .background(theme.colors.surfaceRaised)
+                .border(1.dp, theme.colors.line, SnackbarShape)
                 .semantics { liveRegion = LiveRegionMode.Polite }
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         style = theme.typography.message,
-        color = theme.colors.onInverse,
+        color = theme.colors.ink,
     )
 }
 
